@@ -11,7 +11,6 @@ import {
   WebviewGpuPolicy,
   WindowStartState,
 } from '@/enums/app'
-import { APP_TITLE } from '@/utils'
 
 export const LocalesFilePath = 'data/locales'
 
@@ -144,13 +143,8 @@ export const DefaultPluginHubSources = () => [
   },
   {
     enable: true,
-    name: APP_TITLE,
-    url: `https://api.github.com/repos/GUI-for-Cores/Plugin-Hub/contents/plugins/${
-      {
-        'GUI.for.Clash': 'gfc',
-        'GUI.for.SingBox': 'gfs',
-      }[APP_TITLE]
-    }.json?ref=main`,
+    name: 'GUI.for.SingBox',
+    url: 'https://api.github.com/repos/GUI-for-Cores/Plugin-Hub/contents/plugins/gfs.json?ref=main',
   },
 ]
 
@@ -175,15 +169,10 @@ export const PluginsTriggerOptions = [
 ]
 
 export const ScheduledTaskOptions = [
-  { label: 'scheduledtask.update::subscription', value: ScheduledTasksType.UpdateSubscription },
   { label: 'scheduledtask.update::ruleset', value: ScheduledTasksType.UpdateRuleset },
   { label: 'scheduledtask.update::plugin', value: ScheduledTasksType.UpdatePlugin },
   { label: 'scheduledtask.run::plugin', value: ScheduledTasksType.RunPlugin },
   { label: 'scheduledtask.run::script', value: ScheduledTasksType.RunScript },
-  {
-    label: 'scheduledtask.update::all::subscription',
-    value: ScheduledTasksType.UpdateAllSubscription,
-  },
   { label: 'scheduledtask.update::all::ruleset', value: ScheduledTasksType.UpdateAllRuleset },
   { label: 'scheduledtask.update::all::plugin', value: ScheduledTasksType.UpdateAllPlugin },
 ]

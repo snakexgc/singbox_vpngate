@@ -11,7 +11,8 @@
     "lint": "run-s \"lint:*\"",
     "lint:oxlint": "oxlint . --fix",
     "lint:eslint": "eslint . --fix --cache",
-    "format": "oxfmt src/"
+    "format": "oxfmt src/",
+    "test:vpngate": "node --test"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.4",

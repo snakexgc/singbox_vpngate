@@ -1,178 +1,209 @@
 <script setup lang="ts">
-import { ref, watch, useTemplateRef } from 'vue'
-import { useI18n } from 'vue-i18n'
+import { computed, onActivated, onDeactivated, onUnmounted, ref, watch } from 'vue'
 
-import logo from '@/assets/logo'
-import { ControllerCloseMode } from '@/enums/app'
-import { useAppSettingsStore, useProfilesStore, useKernelApiStore } from '@/stores'
-import { APP_TITLE, debounce, message, modal } from '@/utils'
+import { initWebsocket, destroyWebsocket } from '@/api/kernel'
+import { useVPNGateStore } from '@/stores/vpngate'
+import { canConnectVPNGate } from '@/utils/vpngate'
+import { useVPNGateText } from '@/utils/vpngateText'
 
-import GroupsController from './components/GroupsController.vue'
-import KernelLogs from './components/KernelLogs.vue'
+import VPNGateRepair from '@/components/_common/VPNGateRepair.vue'
+import VPNGateStatus from '@/components/_common/VPNGateStatus.vue'
+
+import ConnectionsController from './components/ConnectionsController.vue'
+import LogsController from './components/LogsController.vue'
 import OverView from './components/OverView.vue'
-import QuickStart from './components/QuickStart.vue'
-
-const showController = ref(false)
-const controllerRef = useTemplateRef('controllerRef')
-
-const { t } = useI18n()
-
-const appSettingsStore = useAppSettingsStore()
-const profilesStore = useProfilesStore()
-const kernelApiStore = useKernelApiStore()
-
-const handleStartKernel = async () => {
-  try {
-    await kernelApiStore.startCore()
-  } catch (error: any) {
-    console.error(error)
-    message.error(error.message || error)
-  }
-}
-
-const handleShowQuickStart = () => {
-  modal({ title: 'subscribes.enterLink' }).setContent(QuickStart).open()
-}
-
-const handleShowKernelLogs = () => {
-  const m = modal({
-    title: 'home.overview.viewlog',
-    width: '90',
-    height: '90',
-    submit: false,
-    cancelText: 'common.close',
-    maskClosable: true,
-  })
-  m.setContent(KernelLogs).open()
-}
-
-let scrollEventCount = 0
-const resetScrollEventCount = debounce(() => (scrollEventCount = 0), 100)
-
-const onMouseWheel = (e: WheelEvent) => {
-  if (!kernelApiStore.running) return
-
-  const isScrollingDown = e.deltaY > 0
-
-  if (
-    isScrollingDown ||
-    appSettingsStore.app.kernel.controllerCloseMode === ControllerCloseMode.All
-  ) {
-    const currentScrollTop = controllerRef.value?.scrollTop ?? 0
-    if (isScrollingDown || currentScrollTop === 0) {
-      scrollEventCount += 1
-    }
-    if (scrollEventCount >= appSettingsStore.app.kernel.controllerSensitivity) {
-      showController.value = isScrollingDown || currentScrollTop !== 0
-    }
-  }
-
-  resetScrollEventCount()
-}
-
-watch(showController, (v) => {
-  if (v) {
-    kernelApiStore.refreshProviderProxies()
-  } else {
-    kernelApiStore.refreshConfig()
-  }
+const text = useVPNGateText()
+const vpn = useVPNGateStore()
+const panel = ref('')
+let active = false
+const connected = computed(() => ['connected', 'direct'].includes(vpn.state?.runtime.status || ''))
+watch(connected, (ready) => {
+  destroyWebsocket()
+  if (active && ready) initWebsocket()
 })
+onActivated(() => {
+  active = true
+  destroyWebsocket()
+  if (connected.value) initWebsocket()
+})
+onDeactivated(() => {
+  active = false
+  panel.value = ''
+  destroyWebsocket()
+})
+onUnmounted(destroyWebsocket)
+const canConnect = computed(() => canConnectVPNGate(vpn.state, vpn.busy))
 </script>
-
 <template>
-  <div class="home-view relative overflow-hidden h-full" @wheel.passive="onMouseWheel">
-    <div
-      v-if="(!kernelApiStore.running && !kernelApiStore.stopping) || kernelApiStore.starting"
-      class="w-full h-[90%] flex flex-col items-center justify-center"
-    >
-      <img :src="logo" draggable="false" class="w-128 mb-16" />
-
-      <template v-if="profilesStore.profiles.length === 0">
-        <p>{{ t('home.noProfile', [APP_TITLE]) }}</p>
-        <Button type="primary" @click="handleShowQuickStart">{{ t('home.quickStart') }}</Button>
-      </template>
-
-      <template v-else>
-        <div class="flex gap-8 mb-32">
-          <Card
-            v-for="p in profilesStore.profiles.slice(0, profilesStore.profiles.length > 4 ? 3 : 4)"
-            :key="p.id"
-            :selected="appSettingsStore.app.kernel.profile === p.id"
-            @click="appSettingsStore.app.kernel.profile = p.id"
-          >
-            <div
-              class="w-128 h-full flex items-center justify-center py-24 text-center cursor-pointer font-bold text-12"
+  <div class="overview-page flex flex-col gap-8 pb-16">
+    <VPNGateStatus />
+    <Card class="runtime-card">
+      <div v-if="vpn.state" class="runtime-content">
+        <div class="runtime-topline">
+          <div class="runtime-identity">
+            <strong class="runtime-state">{{ text(vpn.state.runtime.status) }}</strong>
+            <span class="runtime-node" :title="vpn.selectedNode?.hostname">{{
+              vpn.selectedNode
+                ? `${vpn.selectedNode.country} · ${vpn.selectedNode.hostname}`
+                : text('尚未选择节点 · No node selected')
+            }}</span>
+          </div>
+          <div class="runtime-actions">
+            <Button
+              type="primary"
+              size="small"
+              :disabled="
+                !!vpn.busy ||
+                !canConnect ||
+                vpn.state.runtime.status === 'starting' ||
+                ['connected', 'direct'].includes(vpn.state.runtime.status)
+              "
+              :loading="vpn.busy === 'connect'"
+              @click="vpn.run('connect', undefined)"
+              >{{ text('连接 · Connect') }}</Button
             >
-              {{ p.name }}
-            </div>
-          </Card>
-          <Dropdown v-if="profilesStore.profiles.length > 4" placement="top">
-            <Card class="h-full">
-              <div
-                class="w-128 h-full flex items-center justify-center py-24 text-center cursor-pointer font-bold text-12"
-              >
-                ...
-              </div>
-            </Card>
-            <template #overlay>
-              <div class="flex flex-col py-8">
-                <Button
-                  v-for="p in profilesStore.profiles.slice(3)"
-                  :key="p.id"
-                  @click="appSettingsStore.app.kernel.profile = p.id"
-                >
-                  <div class="min-w-32 w-full flex items-center justify-between">
-                    {{ p.name }}
-                    <Icon v-if="appSettingsStore.app.kernel.profile === p.id" icon="selected" />
-                  </div>
-                </Button>
-              </div>
-            </template>
-          </Dropdown>
-          <Card @click="handleShowQuickStart">
-            <div
-              class="w-128 h-full flex items-center justify-center py-24 text-center cursor-pointer font-bold text-12"
+            <Button
+              size="small"
+              :disabled="!!vpn.busy || vpn.state.runtime.status === 'stopped'"
+              :loading="vpn.busy === 'stop'"
+              @click="vpn.run('stop', undefined)"
+              >{{ text('停止 · Stop') }}</Button
             >
-              {{ t('home.quickStart') }}
-            </div>
-          </Card>
+            <Button size="small" type="text" :loading="vpn.loading" @click="vpn.refresh">{{
+              text('刷新 · Refresh')
+            }}</Button>
+          </div>
         </div>
-        <Button :loading="kernelApiStore.starting" type="primary" @click="handleStartKernel">
-          {{ t('home.overview.start') }}
-        </Button>
-        <Button type="link" size="small" class="mt-4" @click="handleShowKernelLogs">
-          {{ t('home.overview.viewlog') }}
-        </Button>
-      </template>
-    </div>
-
-    <template v-else-if="!kernelApiStore.coreStateLoading">
-      <div :class="{ 'blur-3xl': showController }">
-        <OverView />
-        <Divider class="controller-trigger">
-          <Button type="link" size="small" @click="showController = true">
-            {{ t('home.controller.name') }}
-          </Button>
-        </Divider>
+        <div class="runtime-details">
+          <span
+            >{{ text('核心 · Core') }}:
+            {{
+              vpn.coreStatus?.version ||
+              vpn.state.runtime.coreVersion ||
+              text('未检测 · Not detected')
+            }}</span
+          >
+          <span
+            >{{ text('节点池 · Pool') }}: {{ vpn.state.nodes.length }}/{{
+              vpn.state.settings.poolCapacity
+            }}</span
+          >
+          <RouterLink to="/vpngate"
+            ><Button size="small" type="link">{{ text('选择节点 · Nodes') }}</Button></RouterLink
+          >
+          <RouterLink to="/settings"
+            ><Button size="small" type="link">{{ text('配置上游 · Upstream') }}</Button></RouterLink
+          >
+          <VPNGateRepair compact />
+        </div>
+        <div
+          v-if="vpn.state.runtime.message"
+          class="runtime-message select-text"
+          :title="vpn.state.runtime.message"
+        >
+          {{ vpn.state.runtime.message }}
+        </div>
       </div>
-
-      <div
-        ref="controllerRef"
-        :class="showController ? 'translate-y-0' : 'translate-y-full'"
-        class="controller-panel absolute inset-0 pb-32 overflow-y-auto duration-400"
+      <div v-else class="runtime-content">
+        {{ text('正在读取运行状态 · Reading runtime state…') }}
+      </div>
+    </Card>
+    <OverView :ready="connected" @connections="panel = connected ? 'connections' : ''" />
+    <Card v-if="vpn.state" :title="text('最近任务 · Recent jobs')">
+      <p
+        v-for="job in vpn.state.jobs
+          .filter((item) => item.status !== 'running')
+          .slice(-5)
+          .reverse()"
+        :key="job.id"
       >
-        <GroupsController />
+        {{ text(job.kind) }} · {{ text(job.status) }} · {{ job.completed }}/{{ job.total }} ·
+        {{ job.message }}
+      </p>
+      <p v-if="!vpn.state.jobs.length">{{ text('暂无任务 · No jobs yet') }}</p>
+    </Card>
+    <Card v-if="connected" :title="text('运行监控 · Runtime monitor')">
+      <div class="flex gap-8 my-8">
+        <Button
+          :type="panel === 'connections' ? 'primary' : 'normal'"
+          @click="panel = panel === 'connections' ? '' : 'connections'"
+          >{{ text('连接 · Connections') }}</Button
+        >
+        <Button
+          :type="panel === 'logs' ? 'primary' : 'normal'"
+          @click="panel = panel === 'logs' ? '' : 'logs'"
+          >{{ text('日志 · Logs') }}</Button
+        >
       </div>
-
-      <Button
-        v-show="showController"
-        class="controller-close absolute left-1/2 -translate-x-1/2 bottom-12 z-2"
-        style="background-color: var(--card-bg)"
-        type="text"
-        size="small"
-        icon="close"
-        @click="showController = false"
-      />
-    </template>
+      <div v-if="panel" style="height: 360px" class="overflow-auto">
+        <ConnectionsController v-if="panel === 'connections'" /><LogsController v-else />
+      </div>
+    </Card>
   </div>
 </template>
+
+<style scoped lang="less">
+.runtime-content {
+  padding: 12px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.runtime-topline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.runtime-identity {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.runtime-state {
+  font-size: 22px;
+  white-space: nowrap;
+}
+.runtime-node {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  opacity: 0.8;
+}
+.runtime-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.runtime-details {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.runtime-message {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  opacity: 0.7;
+}
+@media (max-width: 600px) {
+  .runtime-identity {
+    gap: 6px;
+  }
+  .runtime-state {
+    font-size: 18px;
+  }
+  .runtime-topline {
+    flex-wrap: wrap;
+  }
+  .runtime-details {
+    gap: 8px;
+  }
+}
+</style>

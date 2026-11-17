@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import * as Stores from '@/stores'
-import { message } from '@/utils'
+import { useAppStore } from '@/stores'
 
 interface Props {
   loading: boolean
@@ -8,16 +7,7 @@ interface Props {
 
 defineProps<Props>()
 
-const appStore = Stores.useAppStore()
-const kernelApiStore = Stores.useKernelApiStore()
-
-const handleRestartCore = async () => {
-  try {
-    await kernelApiStore.restartCore()
-  } catch (error: unknown) {
-    message.error(error instanceof Error ? error.message : String(error))
-  }
-}
+const appStore = useAppStore()
 
 const openAll = () => {
   appStore.modalMinimized.forEach((m) => m.openFn())
@@ -41,7 +31,7 @@ const minimizeAll = () => {
   />
 
   <div
-    v-if="appStore.modalMinimized.length || kernelApiStore.needRestart || kernelApiStore.restarting"
+    v-if="appStore.modalMinimized.length"
     :style="appStore.modalSplitActive ? { right: 'calc(50% + 32px)' } : undefined"
     class="fixed right-32 bottom-32 flex flex-col gap-8 z-9999"
   >
@@ -72,13 +62,5 @@ const minimizeAll = () => {
         </Card>
       </template>
     </Dropdown>
-    <Button
-      v-if="kernelApiStore.needRestart || kernelApiStore.restarting"
-      v-tips="'home.overview.restart'"
-      :loading="kernelApiStore.restarting"
-      icon="restart"
-      class="rounded-full w-42 h-42 shadow"
-      @click="handleRestartCore"
-    />
   </div>
 </template>

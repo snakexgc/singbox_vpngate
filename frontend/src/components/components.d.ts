@@ -29,7 +29,6 @@ declare module 'vue' {
     Progress: (typeof import('./Progress/index.vue'))['default']
     Prompt: (typeof import('./Prompt/index.vue'))['default']
     Radio: (typeof import('./Radio/index.vue'))['default']
-    ResourceSelect: (typeof import('./ResourceSelect/index.vue'))['default']
     ScrollView: (typeof import('./ScrollView/index.vue'))['default']
     Select: (typeof import('./Select/index.vue'))['default']
     Switch: (typeof import('./Switch/index.vue'))['default']

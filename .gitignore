@@ -1,4 +1,74 @@
-build/bin
-frontend/dist
+# Build outputs and downloaded dependencies
+/build/bin/
+/frontend/dist/
+/frontend/dist-ssr/
+node_modules/
+*.exe
+*.dll
+*.so
+*.dylib
+*.syso
+*.zip
+*.7z
+*.tar.gz
+*.tar.xz
+*.tar.zst
+*.test
+*.tsbuildinfo
 
+# Downloaded rule resources are prepared from pinned, verified sources at build time.
+/internal/vpngateruntime/rules/*.srs
+/internal/vpngateruntime/rules/.*.tmp
+
+# Local application profiles, credentials, runtime files and diagnostics
+/data/
+/vpngate/
+/vpngate-draft/
+/cores/
+/runtime/
+/runtime-offline/
+/probes/
+/logs/
+*.log
+*.pid
+*.db
+*.db-shm
+*.db-wal
+*.ovpn
+*.pem
+*.key
+*.p12
+*.pfx
+state.json
+proxy-snapshot.json
+user.yaml
+profiles.yaml
+subscribes.yaml
+plugins.yaml
+scheduledtasks.yaml
+rulesets.yaml
+.env
+.env.local
+.env.*.local
+!frontend/.env
+
+# Verification output and local working notes
+/coverage/
+/artifacts/
+/screenshots/
+/tmp/
+/temp/
+codex-clipboard-*
+*.prof
+.eslintcache
+/docs/*-report.md
+/docs/vpngate-progress.md
+/docs/vpngate-implementation.md
+
+# Operating system/editor noise
 .DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+*.swp
+*.swo

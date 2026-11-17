@@ -345,6 +345,7 @@ export default {
     startupFailed: 'Startup failed, please Check logs for details',
   },
   router: {
+    routing: 'Routing',
     overview: 'Overview',
     subscriptions: 'Subscriptions',
     rulesets: 'Rulesets',

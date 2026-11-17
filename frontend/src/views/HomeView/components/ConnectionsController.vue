@@ -7,17 +7,8 @@ import { DraggableOptions } from '@/constant/app'
 import { DefaultConnections } from '@/constant/kernel'
 import { useBool } from '@/hooks'
 import { useAppSettingsStore, useKernelApiStore } from '@/stores'
-import {
-  addToRuleSet,
-  formatBytes,
-  formatProxyHost,
-  formatRelativeTime,
-  getDomainSuffixes,
-  message,
-  picker,
-} from '@/utils'
+import { formatBytes, formatProxyHost, formatRelativeTime, message } from '@/utils'
 
-import type { PickerItem } from '@/components/Picker/index.vue'
 import type { Column } from '@/components/Table/index.vue'
 import type { CoreApiConnectionsData } from '@/types/kernel'
 
@@ -169,58 +160,6 @@ const menu: App.Menu[] = [
       }
     },
   },
-  ...(
-    [
-      ['home.connections.addToDirect', 'direct'],
-      ['home.connections.addToProxy', 'proxy'],
-      ['home.connections.addToReject', 'reject'],
-    ] as const
-  ).map(([label, ruleset]) => {
-    return {
-      label,
-      handler: async (record: Record<string, any>) => {
-        const options: PickerItem<Record<string, any>[]>[] = []
-        if (record.metadata.host) {
-          options.push({
-            label: t('kernel.rules.type.domain'),
-            value: { domain: record.metadata.host } as any,
-            description: record.metadata.host,
-          })
-          getDomainSuffixes(record.metadata.host).forEach((suffix) => {
-            options.push({
-              label: t('kernel.rules.type.domain_suffix'),
-              value: {
-                domain_suffix: suffix,
-              } as any,
-              description: suffix,
-            })
-          })
-        }
-        if (record.metadata.destinationIP) {
-          options.push({
-            label: t('kernel.rules.type.ip_cidr'),
-            value: { ip_cidr: record.metadata.destinationIP + '/32' } as any,
-            description: record.metadata.destinationIP,
-          })
-        }
-        if (record.metadata.processPath) {
-          options.push({
-            label: t('kernel.rules.type.process_path'),
-            value: { process_path: record.metadata.processPath } as any,
-            description: record.metadata.processPath,
-          })
-        }
-        const payloads = await picker.multi('rulesets.selectRuleType', options)
-        try {
-          await addToRuleSet(ruleset, payloads)
-          message.success('common.success')
-        } catch (error: any) {
-          message.error(error)
-          console.log(error)
-        }
-      },
-    }
-  }),
 ]
 
 const details = ref()

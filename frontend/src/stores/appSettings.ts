@@ -74,8 +74,8 @@ export const useAppSettingsStore = defineStore('app-settings', () => {
     width: 0,
     height: 0,
     exitOnClose: true,
-    closeKernelOnExit: true,
-    autoSetSystemProxy: true,
+    closeKernelOnExit: false,
+    autoSetSystemProxy: false,
     autoSetSystemDNS: false,
     requestProxyMode: RequestProxyMode.System,
     customProxy: '',
@@ -122,7 +122,7 @@ export const useAppSettingsStore = defineStore('app-settings', () => {
     debugNoRounded: false,
     debugBorder: false,
     debugUsePointer: false,
-    pages: ['Overview', 'Profiles', 'Subscriptions', 'Plugins'],
+    pages: ['Overview', 'VPNGate', 'Routing', 'Settings'],
   })
 
   const systemTitleBarOnStartup = ref(false)
@@ -343,21 +343,6 @@ export const useAppSettingsStore = defineStore('app-settings', () => {
       () => app.value.addPluginToMenu,
     ],
     updateTrayAndMenus,
-  )
-
-  /* Apply SystemProxyBypass */
-  const setSystemProxyBypass = debounce(() => {
-    applyAppSettings.systemProxyBypass()
-  }, 3000)
-  watch(() => [app.value.proxyBypassList, app.value.systemProxyServices], setSystemProxyBypass)
-
-  /* Apply SystemDNS */
-  const setSystemDNS = debounce(() => {
-    applyAppSettings.systemDNS()
-  }, 3000)
-  watch(
-    () => [app.value.systemProxyServices, app.value.systemProxyDNS, app.value.systemDefaultDNS],
-    setSystemDNS,
   )
 
   return { setupAppSettings, app, themeMode, systemTitleBarOnStartup }

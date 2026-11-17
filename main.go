@@ -27,6 +27,8 @@ var icon []byte
 //go:embed build/appicon.png
 var appIcon []byte
 
+const appTitle = "singbox_vpngate"
+
 func main() {
 	app := bridge.CreateApp(assets)
 
@@ -42,7 +44,7 @@ func main() {
 		MinHeight:        400,
 		DisableResize:    false,
 		Menu:             app.AppMenu,
-		Title:            bridge.Env.AppName,
+		Title:            appTitle,
 		Frameless:        bridge.Env.OS != "darwin" && !bridge.Config.SystemTitleBar,
 		Width:            bridge.Config.Width,
 		Height:           bridge.Config.Height,
@@ -63,7 +65,7 @@ func main() {
 			WebviewIsTransparent: true,
 			WindowIsTranslucent:  true,
 			About: &mac.AboutInfo{
-				Title:   bridge.Env.AppName,
+				Title:   appTitle,
 				Message: "© 2026 GUI.for.Cores",
 				Icon:    icon,
 			},
@@ -71,7 +73,7 @@ func main() {
 		Linux: &linux.Options{
 			Icon:                appIcon,
 			WindowIsTranslucent: false,
-			ProgramName:         bridge.Env.AppName,
+			ProgramName:         appTitle,
 			WebviewGpuPolicy:    linux.WebviewGpuPolicy(bridge.Config.WebviewGpuPolicy),
 		},
 		AssetServer: &assetserver.Options{
@@ -95,6 +97,9 @@ func main() {
 			app.Ctx = ctx
 			runtime.InitializeNotifications(ctx)
 			trayStart()
+		},
+		OnShutdown: func(ctx context.Context) {
+			bridge.CloseVPNGateRuntime()
 		},
 		OnBeforeClose: func(ctx context.Context) (prevent bool) {
 			if !bridge.Env.PreventExit {

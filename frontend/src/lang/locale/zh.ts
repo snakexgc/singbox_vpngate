@@ -345,6 +345,7 @@ export default {
     startupFailed: '启动失败，请查看日志详情',
   },
   router: {
+    routing: '路由',
     overview: '概览',
     subscriptions: '订阅',
     rulesets: '规则集',

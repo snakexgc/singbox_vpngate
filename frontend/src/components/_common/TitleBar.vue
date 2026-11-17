@@ -87,12 +87,6 @@ onUnmounted(() => window.removeEventListener('resize', onResize))
     >
       <span class="app-titlebar__name">{{ APP_TITLE }}</span>
       <span class="app-titlebar__version">{{ APP_VERSION }}</span>
-      <div
-        v-if="appStore.customActions.title_bar.length"
-        class="app-titlebar__custom-actions inline-flex items-center"
-      >
-        <CustomAction :actions="appStore.customActions.title_bar" />
-      </div>
       <Icon
         v-if="kernelApiStore.starting || kernelApiStore.stopping || kernelApiStore.restarting"
         :size="14"

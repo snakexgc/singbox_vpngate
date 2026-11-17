@@ -5,21 +5,12 @@ import { useI18n } from 'vue-i18n'
 import { LogLevelOptions } from '@/constant/kernel'
 import { useBool } from '@/hooks'
 import { useKernelApiStore } from '@/stores'
-import {
-  addToRuleSet,
-  buildSmartRegExp,
-  getDomainSuffixes,
-  isValidIPv4,
-  isValidIPv6,
-  message,
-  picker,
-} from '@/utils'
-
-import type { PickerItem } from '@/components/Picker/index.vue'
+import { buildSmartRegExp } from '@/utils'
 
 const logType = ref<'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'panic'>('info')
 const keywords = ref('')
-const logs = ref<{ type: string; payload: string }[]>([])
+const logs = ref<{ id: number; type: string; payload: string }[]>([])
+let nextLogId = 0
 
 const LogLevelMap = {
   trace: ['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'panic'],
@@ -39,68 +30,6 @@ const filteredLogs = computed(() => {
   })
 })
 
-const menus: App.Menu[] = (
-  [
-    ['home.connections.addToDirect', 'direct'],
-    ['home.connections.addToProxy', 'proxy'],
-    ['home.connections.addToReject', 'reject'],
-  ] as const
-).map(([label, ruleset]) => {
-  return {
-    label,
-    handler: async ({ type, payload }) => {
-      if (type !== 'info') {
-        message.error('Not Support')
-        return
-      }
-      const regex = /(\b((?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}|(?:\d{1,3}\.){3}\d{1,3})(:\d+)?\b)/g
-      const matches = payload.match(regex)
-      if (!matches) {
-        message.error('Not Matched')
-        return
-      }
-
-      const options: PickerItem<Record<string, any>[]>[] = []
-
-      matches.forEach((match: string) => {
-        // FIXME: IPv6
-        const address = match.split(':')[0]
-        if (!address) return
-        if (isValidIPv4(address) || isValidIPv6(address)) {
-          options.push({
-            label: t('kernel.rules.type.ip_cidr'),
-            value: { ip_cidr: address + '/32' } as any,
-            description: address,
-          })
-        } else {
-          options.push({
-            label: t('kernel.rules.type.domain'),
-            value: { domain: address } as any,
-            description: address,
-          })
-          getDomainSuffixes(address).forEach((suffix) => {
-            options.push({
-              label: t('kernel.rules.type.domain_suffix'),
-              value: { domain_suffix: suffix } as any,
-              description: suffix,
-            })
-          })
-        }
-      })
-
-      const payloads = await picker.multi('rulesets.selectRuleType', options)
-
-      try {
-        await addToRuleSet(ruleset, payloads)
-        message.success('common.success')
-      } catch (error: any) {
-        message.error(error)
-        console.log(error)
-      }
-    },
-  }
-})
-
 const { t } = useI18n()
 const [pause, togglePause] = useBool(false)
 const kernelApiStore = useKernelApiStore()
@@ -108,7 +37,7 @@ const kernelApiStore = useKernelApiStore()
 const handleClear = () => logs.value.splice(0)
 
 const unregisterLogsHandler = kernelApiStore.onLogs((data) => {
-  pause.value || logs.value.unshift(data)
+  if (!pause.value) logs.value.unshift({ ...data, id: nextLogId++ })
 })
 
 onUnmounted(() => {
@@ -146,12 +75,7 @@ onUnmounted(() => {
     </template>
 
     <template #body>
-      <div
-        v-for="log in filteredLogs"
-        :key="log.payload"
-        v-menu="menus.map((v) => ({ ...v, handler: () => v.handler?.(log) }))"
-        class="log select-text text-12 py-2 my-4"
-      >
+      <div v-for="log in filteredLogs" :key="log.id" class="log select-text text-12 py-2 my-4">
         <span class="type inline-block text-center">{{ log.type }}</span> {{ log.payload }}
       </div>
     </template>

@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { RemoveFile } from '@/bridge'
 import { CoreCacheFilePath } from '@/constant/kernel'
 import { useCoreBranch } from '@/hooks/useCoreBranch'
-import { useKernelApiStore } from '@/stores'
+import { useVPNGateStore } from '@/stores/vpngate'
 import { message } from '@/utils'
 
 interface Props {
@@ -16,7 +16,7 @@ const props = withDefaults(defineProps<Props>(), {})
 const emit = defineEmits(['config'])
 
 const { t } = useI18n()
-const kernelApiStore = useKernelApiStore()
+const vpn = useVPNGateStore()
 
 const {
   restartable,
@@ -43,11 +43,7 @@ const {
 
 const handleClearCoreCache = async () => {
   try {
-    if (kernelApiStore.running) {
-      await kernelApiStore.restartCore(() => RemoveFile(CoreCacheFilePath))
-    } else {
-      await RemoveFile(CoreCacheFilePath)
-    }
+    await RemoveFile(CoreCacheFilePath)
     message.success('common.success')
   } catch (error: any) {
     message.error(error)
@@ -150,7 +146,7 @@ const handleClearCoreCache = async () => {
       />
       <Button
         v-show="!localVersionLoading && !remoteVersionLoading && restartable"
-        :loading="kernelApiStore.restarting"
+        :loading="!!vpn.busy"
         size="small"
         type="primary"
         class="ml-auto"

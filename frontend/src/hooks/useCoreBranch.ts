@@ -1,275 +1,144 @@
-import { computed, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
+import { computed, watch } from 'vue'
 
-import {
-  Download,
-  HttpCancel,
-  UnzipZIPFile,
-  UnzipTarGZFile,
-  HttpGet,
-  Exec,
-  MoveFile,
-  RemoveFile,
-  AbsolutePath,
-  BrowserOpenURL,
-  MakeDir,
-  FileExists,
-  OpenDir,
-} from '@/bridge'
-import { CoreWorkingDirectory } from '@/constant/kernel'
-import { Branch, OS } from '@/enums/app'
-import { useAppSettingsStore, useEnvStore, useKernelApiStore } from '@/stores'
-import {
-  getGitHubApiAuthorization,
-  GrantTUNPermission,
-  PreserveCorePermissions,
-  ignoredError,
-  confirm,
-  message,
-  debounce,
-  getKernelFileName,
-  getKernelAssetFileName,
-} from '@/utils'
+import { BrowserOpenURL, OpenDir } from '@/bridge'
+import { Branch } from '@/enums/app'
+import { useAppSettingsStore } from '@/stores/appSettings'
+import { useCoreManagerStore } from '@/stores/coreManager'
+import { useVPNGateStore } from '@/stores/vpngate'
+import { confirm, message } from '@/utils/interaction'
 
-const StableUrl = 'https://api.github.com/repos/SagerNet/sing-box/releases/latest'
-const AlphaUrl = 'https://api.github.com/repos/SagerNet/sing-box/releases?per_page=3'
+const displayVersion = (version = '') => version.replace(/^v/, '')
+const branchOf = (version: string) =>
+  version.split('+')[0]?.includes('-') ? Branch.Alpha : Branch.Main
 
-const StablePage = 'https://github.com/SagerNet/sing-box/releases/latest'
-const AlphaPage = 'https://github.com/SagerNet/sing-box/releases'
+// Branch cards activate an already installed version; release discovery is never needed here.
+export const chooseCoreBranch = async (isAlpha: boolean) => {
+  const manager = useCoreManagerStore()
+  const vpn = useVPNGateStore()
+  const settings = useAppSettingsStore()
+  if (!vpn.coreStatus) await vpn.refreshCore()
+  const installed = manager.installedCores(isAlpha)[0]
+  if (!installed) {
+    // The compatible bundled core is already selected, even without managed installations.
+    if (
+      vpn.coreStatus?.installed &&
+      branchOf(vpn.coreStatus.version) === (isAlpha ? Branch.Alpha : Branch.Main)
+    ) {
+      settings.app.kernel.branch = isAlpha ? Branch.Alpha : Branch.Main
+      return true
+    }
+    message.error('请先下载该分支的内核。 · Download this branch before selecting it.')
+    return false
+  }
+  if (!(await manager.useVersion(installed.version))) {
+    if (vpn.error) message.error(vpn.error)
+    return false
+  }
+  settings.app.kernel.branch = isAlpha ? Branch.Alpha : Branch.Main
+  return true
+}
 
 export const useCoreBranch = (isAlpha = false) => {
-  const releaseUrl = isAlpha ? AlphaUrl : StableUrl
-
-  const localVersion = ref('')
-  const remoteVersion = ref('')
-  const versionDetail = ref('')
-
-  const localVersionLoading = ref(false)
-  const remoteVersionLoading = ref(false)
-  const downloading = ref(false)
-  const downloadCompleted = ref(false)
-  const downloadProgress = ref('')
-  const cancelDownload = ref<() => void>()
-
-  const rollbackable = ref(false)
-
-  const { t } = useI18n()
-  const envStore = useEnvStore()
-  const appSettings = useAppSettingsStore()
-  const kernelApiStore = useKernelApiStore()
-
-  const restartable = computed(() => {
-    const { branch } = appSettings.app.kernel
-    if (!kernelApiStore.running) return false
-    return localVersion.value && downloadCompleted.value && (branch === Branch.Alpha) === isAlpha
+  const manager = useCoreManagerStore()
+  const vpn = useVPNGateStore()
+  const settings = useAppSettingsStore()
+  const local = computed(() => manager.localCore(isAlpha))
+  const localVersion = computed(() => displayVersion(local.value?.version))
+  const remoteVersion = computed(() =>
+    displayVersion(manager.releases.find((release) => release.prerelease === isAlpha)?.version),
+  )
+  const downloading = computed(() => manager.downloadingBranch === isAlpha)
+  const downloadProgress = computed(() => {
+    const job = manager.installJob
+    if (!job) return 'Loading'
+    return job.total > 0
+      ? `${job.message} ${Math.min(100, (job.completed / job.total) * 100).toFixed(2)}%`
+      : job.message
   })
-
-  const updatable = computed(
-    () => remoteVersion.value && localVersion.value !== remoteVersion.value,
+  const cancelDownload = computed(() =>
+    downloading.value && manager.installJob?.status === 'running'
+      ? () => manager.cancelInstall()
+      : undefined,
   )
-
-  const grantable = computed(() => localVersion.value && envStore.env.os !== OS.Windows)
-
-  const CoreFilePath = `${CoreWorkingDirectory}/${getKernelFileName(isAlpha)}`
-  const CoreBakFilePath = `${CoreFilePath}.bak`
-
-  const downloadCore = async () => {
-    downloading.value = true
-    downloadProgress.value = ''
-    cancelDownload.value = undefined
-    try {
-      const { body } = await HttpGet<Record<string, any>>(releaseUrl, {
-        Authorization: getGitHubApiAuthorization(),
-      })
-      if (body.message) throw body.message
-
-      const release = isAlpha ? body.find((v: any) => v.prerelease === true) : body
-      if (!release) throw 'Not Found'
-      const { assets, tag_name } = release
-      const assetName = getKernelAssetFileName(tag_name.replace('v', ''))
-      const asset = assets.find((v: any) => v.name === assetName)
-      if (!asset) throw 'Asset Not Found:' + assetName
-      if (asset.uploader.login !== 'github-actions[bot]') {
-        await confirm('common.warning', 'settings.kernel.risk', {
-          type: 'text',
-          okText: 'settings.kernel.stillDownload',
-        })
-      }
-
-      const downloadCacheFile = `data/.cache/${assetName}`
-
-      cancelDownload.value = () => {
-        HttpCancel(downloadCacheFile)
-        setTimeout(() => RemoveFile(downloadCacheFile), 1000)
-        cancelDownload.value = undefined
-      }
-
-      await MakeDir(CoreWorkingDirectory)
-
-      await Download(
-        asset.browser_download_url,
-        downloadCacheFile,
-        undefined,
-        (progress, total) => {
-          const txt = t('common.downloading') + ((progress / total) * 100).toFixed(2) + '%'
-          downloadProgress.value = txt
-        },
-        {
-          CancelId: downloadCacheFile,
-          Sha256: asset.digest.slice(7),
-        },
-      )
-
-      const stableFileName = getKernelFileName()
-
-      await ignoredError(MoveFile, CoreFilePath, CoreBakFilePath)
-
-      if (assetName.endsWith('.zip')) {
-        await UnzipZIPFile(downloadCacheFile, 'data/.cache')
-        const tmpPath = `data/.cache/${assetName.replace('.zip', '')}`
-        await MoveFile(`${tmpPath}/${stableFileName}`, CoreFilePath)
-        await RemoveFile(tmpPath)
-      } else if (assetName.endsWith('.tar.gz')) {
-        await UnzipTarGZFile(downloadCacheFile, 'data/.cache')
-        const tmpPath = `data/.cache/${assetName.replace('.tar.gz', '')}`
-        await MoveFile(`${tmpPath}/${stableFileName}`, CoreFilePath)
-        await RemoveFile(tmpPath)
-      }
-
-      await RemoveFile(downloadCacheFile)
-
-      if (!CoreFilePath.endsWith('.exe')) {
-        await ignoredError(Exec, 'chmod', ['+x', await AbsolutePath(CoreFilePath)])
-        await PreserveCorePermissions(CoreBakFilePath, CoreFilePath)
-      }
-
-      refreshLocalVersion()
-      downloadCompleted.value = true
-      message.success('common.success')
-    } catch (error: any) {
-      console.log(error)
-      message.error(error.message || error)
-      downloadCompleted.value = false
-    }
-    downloading.value = false
-  }
-
-  const getLocalVersion = async (showTips = false) => {
-    localVersionLoading.value = true
-    try {
-      const res = await Exec(CoreFilePath, ['version'])
-      versionDetail.value = res.trim()
-      return res.match(/version (\S+)/)?.[1] || ''
-    } catch (error: any) {
-      console.log(error)
-      showTips && message.error(error)
-    } finally {
-      localVersionLoading.value = false
-    }
-    return ''
-  }
-
-  const getRemoteVersion = async (showTips = false) => {
-    remoteVersionLoading.value = true
-    try {
-      const { body } = await HttpGet<Record<string, any>>(releaseUrl, {
-        Authorization: getGitHubApiAuthorization(),
-      })
-      const release = isAlpha ? body.find((v: any) => v.prerelease === true) : body
-      if (!release) throw 'Not Found'
-      const { tag_name } = release
-      return tag_name.replace('v', '') as string
-    } catch (error: any) {
-      console.log(error)
-      showTips && message.error(error)
-    } finally {
-      remoteVersionLoading.value = false
-    }
-    return ''
-  }
-
-  const restartCore = async () => {
-    if (!kernelApiStore.running) return
-    try {
-      await kernelApiStore.restartCore()
-      downloadCompleted.value = false
-    } catch (error: any) {
-      message.error(error)
-    }
-  }
-
   const refreshLocalVersion = async (showTips = false) => {
-    localVersion.value = await getLocalVersion(showTips)
+    await vpn.refreshCore()
+    if (showTips && vpn.coreStatus?.error) message.error(vpn.coreStatus.error)
   }
-
   const refreshRemoteVersion = async (showTips = false) => {
-    remoteVersion.value = await getRemoteVersion(showTips)
+    const success = await manager.loadReleases(true)
+    if (!success && showTips) message.error(manager.releasesError)
   }
-
-  const grantCorePermission = async () => {
-    await GrantTUNPermission(CoreFilePath)
-    message.success('common.success')
+  const downloadCore = async () => {
+    if (!(await manager.installCore(isAlpha, remoteVersion.value)) && vpn.error)
+      message.error(vpn.error)
   }
-
   const rollbackCore = async () => {
-    await confirm('common.warning', 'settings.kernel.rollback')
-
-    const doRollback = () => MoveFile(CoreBakFilePath, CoreFilePath)
-
-    const { branch } = appSettings.app.kernel
-    const isCurrentRunning = kernelApiStore.running && (branch === Branch.Alpha) === isAlpha
-    if (isCurrentRunning) {
-      await kernelApiStore.restartCore(doRollback)
-    } else {
-      await doRollback()
+    try {
+      await confirm('common.warning', 'settings.kernel.rollback')
+    } catch {
+      return
     }
-    refreshLocalVersion()
-    message.success('common.success')
+    if (await manager.rollbackCore(isAlpha)) message.success('common.success')
+    else if (vpn.error) message.error(vpn.error)
   }
-
-  const openReleasePage = () => {
-    BrowserOpenURL(isAlpha ? AlphaPage : StablePage)
-  }
-
   const openFileLocation = async () => {
-    await OpenDir(CoreWorkingDirectory)
+    const path = local.value?.path || vpn.coreStatus?.path
+    if (!path) return
+    const directory = path.replace(/[\\/][^\\/]+$/, '')
+    try {
+      await OpenDir(directory === path ? '.' : directory)
+    } catch (cause) {
+      message.error(cause)
+    }
   }
 
   watch(
-    () => appSettings.app.kernel.branch,
-    () => (downloadCompleted.value = false),
+    () => vpn.coreStatus?.version,
+    (version) => {
+      if (version && vpn.coreStatus?.installed) settings.app.kernel.branch = branchOf(version)
+    },
+    { immediate: true },
   )
-
   watch(
-    [localVersion, downloadCompleted],
-    debounce(async () => {
-      rollbackable.value = await FileExists(CoreBakFilePath)
-    }, 500),
+    () => manager.installJob?.status,
+    (status, previous) => {
+      if (manager.installation?.isAlpha !== isAlpha || status === previous) return
+      if (status === 'completed') message.success('common.success')
+      else if (status === 'failed') message.error(manager.installJob?.message)
+    },
   )
 
-  refreshLocalVersion()
-  refreshRemoteVersion()
+  void refreshLocalVersion()
+  void manager.loadReleases(true)
 
   return {
-    restartable,
-    updatable,
-    grantable,
-    rollbackable,
-    versionDetail,
+    // Installing selects the checked executable while stopped; no extra restart is needed.
+    restartable: computed(() => false),
+    updatable: computed(() => !!remoteVersion.value && localVersion.value !== remoteVersion.value),
+    grantable: computed(() => false),
+    rollbackable: computed(() => !!manager.rollbackVersion(isAlpha)),
+    versionDetail: computed(() =>
+      localVersion.value ? `sing-box version ${localVersion.value}` : '',
+    ),
     localVersion,
-    localVersionLoading,
+    localVersionLoading: computed(() => vpn.coreStatusLoading),
     remoteVersion,
-    remoteVersionLoading,
+    remoteVersionLoading: computed(() => manager.releasesLoading),
     downloading,
     downloadProgress,
+    cancelDownload,
     refreshLocalVersion,
     refreshRemoteVersion,
     downloadCore,
-    cancelDownload,
-    restartCore,
+    restartCore: async () => undefined,
     rollbackCore,
-    grantCorePermission,
-    openReleasePage,
+    grantCorePermission: async () => undefined,
+    openReleasePage: () =>
+      BrowserOpenURL(
+        isAlpha
+          ? 'https://github.com/SagerNet/sing-box/releases'
+          : 'https://github.com/SagerNet/sing-box/releases/latest',
+      ),
     openFileLocation,
   }
 }

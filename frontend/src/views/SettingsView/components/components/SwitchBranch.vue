@@ -2,23 +2,14 @@
 import { useI18n } from 'vue-i18n'
 
 import { Branch } from '@/enums/app'
-import { useAppSettingsStore, useKernelApiStore } from '@/stores'
-import { message } from '@/utils'
+import { chooseCoreBranch } from '@/hooks/useCoreBranch'
+import { useAppSettingsStore } from '@/stores'
 
 const { t } = useI18n()
 const appSettings = useAppSettingsStore()
-const kernelApiStore = useKernelApiStore()
 
 const handleUseBranch = async (branch: Branch) => {
-  appSettings.app.kernel.branch = branch
-
-  if (!kernelApiStore.running) return
-
-  try {
-    await kernelApiStore.restartCore()
-  } catch (error: any) {
-    message.error(error)
-  }
+  await chooseCoreBranch(branch === Branch.Alpha)
 }
 </script>
 

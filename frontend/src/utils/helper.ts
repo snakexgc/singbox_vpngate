@@ -1,4 +1,3 @@
-import { deleteConnection, getConnections, useProxy } from '@/api/kernel'
 import {
   AbsolutePath,
   Exec,
@@ -6,29 +5,16 @@ import {
   FileExists,
   GetEnv,
   GetSystemProxy,
-  ReadFile,
   RemoveFile,
   WindowReloadApp,
   WriteFile,
 } from '@/bridge'
 import { CoreWorkingDirectory } from '@/constant/kernel'
 import { OS, RequestProxyMode } from '@/enums/app'
-import { RulesetFormat } from '@/enums/kernel'
-import i18n from '@/lang'
-import {
-  useAppSettingsStore,
-  useAppStore,
-  useEnvStore,
-  useKernelApiStore,
-  usePluginsStore,
-  useRulesetsStore,
-} from '@/stores'
+import { useAppSettingsStore, useEnvStore, useKernelApiStore } from '@/stores'
 import {
   formatProxyHost,
-  ignoredError,
   normalizeRequestProxy,
-  message,
-  confirm,
   APP_TITLE,
   getAutoStartConfiguration,
   quoteWindowsArg,
@@ -257,153 +243,12 @@ export const DisableAutoStart = async () => {
   }
 }
 
-// Others
-export const handleUseProxy = async (group: any, proxy: any) => {
-  if (group.type !== 'Selector' || group.now === proxy.name) return
-  const promises: Promise<null>[] = []
-  const appSettings = useAppSettingsStore()
-  const kernelApiStore = useKernelApiStore()
-  if (appSettings.app.kernel.autoClose) {
-    const { connections } = await getConnections()
-    promises.push(
-      ...(connections || [])
-        .filter((v) => v.chains.includes(group.name))
-        .map((v) => deleteConnection(v.id)),
-    )
-  }
-  await useProxy(encodeURIComponent(group.name), proxy.name)
-  await Promise.all(promises)
-  await kernelApiStore.refreshProviderProxies()
-}
-
-export const handleChangeMode = async (mode: 'direct' | 'global' | 'rule') => {
-  const kernelApiStore = useKernelApiStore()
-
-  if (mode === kernelApiStore.config.mode) return
-
-  kernelApiStore.updateConfig('mode', mode)
-
-  const { connections } = await getConnections()
-  const promises = (connections || []).map((v) => deleteConnection(v.id))
-  await Promise.all(promises)
-}
-
-export const addToRuleSet = async (
-  id: 'direct' | 'reject' | 'proxy',
-  payloads: Record<string, any>[],
-) => {
-  const path = `data/rulesets/${id}.json`
-
-  const rulesetsStoe = useRulesetsStore()
-  let ruleset = rulesetsStoe.getRulesetById(id)
-  if (!ruleset) {
-    ruleset = {
-      id,
-      name: id,
-      updateTime: 0,
-      type: 'Manual',
-      format: RulesetFormat.Source,
-      url: '',
-      path,
-      count: 0,
-      disabled: false,
-    }
-    await rulesetsStoe.addRuleset(ruleset)
-  }
-
-  const content = (await ignoredError(ReadFile, path)) || '{ "version": 1, "rules": [] }'
-  const { rules = [] } = JSON.parse(content)
-  rules[0] = rules[0] || {}
-  payloads.forEach((payload) => {
-    if (payload.domain) {
-      rules[0].domain = [...new Set((rules[0].domain || []).concat(payload.domain))]
-    } else if (payload.ip_cidr) {
-      rules[0].ip_cidr = [...new Set((rules[0].ip_cidr || []).concat(payload.ip_cidr))]
-    } else if (payload.process_path) {
-      rules[0].process_path = [
-        ...new Set((rules[0].process_path || []).concat(payload.process_path)),
-      ]
-    } else if (payload.domain_suffix) {
-      rules[0].domain_suffix = [
-        ...new Set((rules[0].domain_suffix || []).concat(payload.domain_suffix)),
-      ]
-    }
-  })
-  await WriteFile(path, JSON.stringify({ version: 1, rules }, null, 2))
-  await rulesetsStoe.updateRuleset(id)
-}
-
+// Normal exit cleanup belongs to the desktop backend (owned children and proxy snapshot).
 export const reloadApp = async () => {
-  const { t } = i18n.global
-  const appStore = useAppStore()
-  const pluginsStore = usePluginsStore()
-
-  appStore.isAppReloading = true
-
-  let timedout = false
-  const { destroy } = message.info('titlebar.reloadPending', 10 * 60 * 1000)
-
-  const timeoutId = setTimeout(async () => {
-    timedout = true
-    appStore.isAppReloading = false
-    destroy()
-    confirm('Warning', t('titlebar.reloadTimeout')).then(WindowReloadApp)
-  }, 10_000)
-
-  try {
-    await pluginsStore.onReloadTrigger()
-    if (!timedout) {
-      clearTimeout(timeoutId)
-      WindowReloadApp()
-    }
-  } catch (err: any) {
-    clearTimeout(timeoutId)
-    confirm('Error', t('titlebar.reloadError', { reason: err })).then(WindowReloadApp)
-  }
-
-  appStore.isAppReloading = false
-  destroy()
+  WindowReloadApp()
 }
-
 export const exitApp = async () => {
-  const { t } = i18n.global
-  const appStore = useAppStore()
-  const envStore = useEnvStore()
-  const pluginsStore = usePluginsStore()
-  const appSettings = useAppSettingsStore()
-  const kernelApiStore = useKernelApiStore()
-
-  appStore.isAppExiting = true
-
-  let timedout = false
-  const { destroy } = message.info('titlebar.exitPending', 10 * 60 * 1000)
-
-  const timeoutId = setTimeout(async () => {
-    timedout = true
-    appStore.isAppExiting = false
-    destroy()
-    confirm('Warning', t('titlebar.exitTimeout')).then(ExitApp)
-  }, 10_000)
-
-  try {
-    if (kernelApiStore.running && appSettings.app.closeKernelOnExit) {
-      await kernelApiStore.stopCore()
-      if (appSettings.app.autoSetSystemProxy) {
-        await envStore.clearSystemProxy()
-      }
-    }
-    await pluginsStore.onShutdownTrigger()
-    if (!timedout) {
-      clearTimeout(timeoutId)
-      ExitApp()
-    }
-  } catch (err: any) {
-    clearTimeout(timeoutId)
-    confirm('Error', t('titlebar.exitError', { reason: err })).then(ExitApp)
-  }
-
-  appStore.isAppExiting = false
-  destroy()
+  ExitApp()
 }
 
 export const getKernelFileName = (isAlpha = false) => {

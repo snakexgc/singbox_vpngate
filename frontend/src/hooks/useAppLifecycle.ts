@@ -2,38 +2,12 @@ import { onUnmounted } from 'vue'
 
 import { EventsOn, WindowHide } from '@/bridge'
 import * as Stores from '@/stores'
-import { exitApp, message, modal, sampleID } from '@/utils'
+import { exitApp, modal } from '@/utils'
 
 import CommandView from '@/components/_common/CommandView.vue'
 
-export const handleLaunchApp = async (args: string[]) => {
-  const arg = args.find((a) => a.includes('://'))
-  if (!arg) return
-
-  let _url
-  let _name = sampleID()
-
-  const url = new URL(arg)
-  if (url.pathname === '//install-config/' || url.hostname === 'import-remote-profile') {
-    _url = url.searchParams.get('url')
-    _name = url.searchParams.get('name') || sampleID()
-  } else if (url.pathname.startsWith('//import-remote-profile')) {
-    _url = url.searchParams.get('url')
-    _name = decodeURIComponent(url.hash).slice(1) || sampleID()
-  }
-
-  if (!_url) {
-    message.error('URL missing')
-    return
-  }
-
-  try {
-    await Stores.useSubscribesStore().importSubscribe(_name, _url)
-    message.success('common.success')
-  } catch (error) {
-    message.error(error)
-  }
-}
+// Legacy subscription deep links are deliberately ignored in managed mode.
+export const handleLaunchApp = async (_args: string[]) => {}
 
 export const useAppLifecycle = () => {
   const appStore = Stores.useAppStore()

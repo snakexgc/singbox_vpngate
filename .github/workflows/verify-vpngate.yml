@@ -1,0 +1,39 @@
+name: Verify VPNGate
+on:
+  pull_request:
+  push:
+    branches: ['main', 'codex/**']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Install frontend dependencies
+        shell: pwsh
+        run: pnpm --dir frontend install --frozen-lockfile
+      - name: Frontend behavioral checks
+        shell: pwsh
+        run: pnpm --dir frontend test:vpngate
+      - name: Build frontend assets
+        shell: pwsh
+        run: pnpm --dir frontend build
+      - name: Prepare pinned rule resources
+        shell: pwsh
+        run: ./scripts/prepare-rule-resources.ps1
+      - name: Go tests
+        shell: pwsh
+        run: go test ./...
+      - name: Go vet
+        shell: pwsh
+        run: go vet ./...

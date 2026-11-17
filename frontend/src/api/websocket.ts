@@ -26,21 +26,41 @@ export class WebSockets {
 
     let isManualClose = false
     let ws: WebSocket | null = null
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined
+    let generation = 0
+
+    const clearReconnect = () => {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = undefined
+    }
 
     const connect = () => {
-      ws = new WebSocket(this.base + url)
-      ws.onmessage = (e) => options.cb(JSON.parse(e.data))
-      ws.onclose = () => {
-        setTimeout(() => {
-          if (!isManualClose) {
-            setTimeout(connect, 3000)
-          }
-        }, 1000)
+      if (ws) return
+      clearReconnect()
+      isManualClose = false
+      const current = ++generation
+      const socket = new WebSocket(this.base + url)
+      ws = socket
+      socket.onmessage = (e) => {
+        if (!isManualClose && ws === socket) options.cb(JSON.parse(e.data))
+      }
+      socket.onclose = () => {
+        if (ws !== socket) return
+        ws = null
+        socket.onmessage = null
+        socket.onclose = null
+        reconnectTimer = setTimeout(() => {
+          if (isManualClose || current !== generation) return
+          reconnectTimer = undefined
+          connect()
+        }, 4000)
       }
     }
 
     const disconnect = () => {
       isManualClose = true
+      generation++
+      clearReconnect()
       if (ws) {
         ws.onmessage = null
         ws.onclose = null

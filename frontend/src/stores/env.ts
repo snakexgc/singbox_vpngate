@@ -76,11 +76,7 @@ export const useEnvStore = defineStore('env', () => {
   const setSystemProxy = async () => {
     const proxyBypassList = appSettings.app.proxyBypassList
     const services = appSettings.app.systemProxyServices
-    let proxyEndpoint = kernelApiStore.getProxyEndpoint()
-    if (!proxyEndpoint) {
-      await kernelApiStore.updateConfig('inbound', undefined)
-    }
-    proxyEndpoint = kernelApiStore.getProxyEndpoint()
+    const proxyEndpoint = kernelApiStore.getProxyEndpoint()
     if (!proxyEndpoint) throw 'home.overview.needPort'
     const server = `${formatProxyHost(proxyEndpoint.host)}:${proxyEndpoint.port}`
     await SetSystemProxy(true, server, proxyEndpoint.proxyType, proxyBypassList, services)
