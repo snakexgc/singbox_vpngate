@@ -1,8 +1,11 @@
 const labels: Record<string, string> = {
   stopped: '已停止 · Stopped',
   starting: '正在连接 · Starting',
+  connecting: '连接中 · Connecting',
   connected: '已连接 · Connected',
+  offline: 'VPNGate 不可用 · VPNGate unavailable',
   protected: '连接已停止 · Connection stopped',
+  degraded: '连接异常 · Connection degraded',
   error: '错误 · Error',
   direct: '直连 · Direct',
   untested: '未测试 · Untested',

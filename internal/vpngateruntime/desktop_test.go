@@ -53,27 +53,31 @@ func TestDesktopPinsPortableCoreAndConnectHasNoServiceGate(t *testing.T) {
 	}
 }
 
-func TestDesktopTUNPreflightRequiresElevatedGUIBeforeCoreOrNetworking(t *testing.T) {
+func TestDesktopStartupWithMissingCoreLeavesTUNPendingWithoutNetworkChanges(t *testing.T) {
 	m, err := NewDesktop(t.TempDir(), "missing-core.exe")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer m.Close()
+	if fresh := m.State(); fresh.Settings.TUNEnabled || fresh.Settings.SystemProxyEnabled {
+		t.Fatal("first desktop launch must not capture host traffic")
+	}
 	m.isAdmin = func() bool { return false }
 	m.settings.Upstream.Port = 7890
 	m.settings.RoutingPreset = "direct"
+	m.settings.TUNEnabled = true
 	if !m.State().Runtime.RequiresAdmin {
 		t.Fatal("TUN did not advertise elevation")
 	}
-	_, err = m.Handle(context.Background(), "connect", nil)
-	if err == nil || !strings.Contains(err.Error(), "管理员") || !strings.Contains(err.Error(), "TUN") {
-		t.Fatalf("wrong privilege preflight: %v", err)
+	_, err = m.Handle(context.Background(), "runtime.startup", nil)
+	if err != nil || !m.startupPendingCore || m.State().Runtime.Status != "stopped" {
+		t.Fatalf("startup did not wait for a missing core: %v", err)
 	}
 	if _, err = os.Stat(filepath.Join(m.dir, "runtime")); !os.IsNotExist(err) {
 		t.Fatalf("preflight touched runtime: %v", err)
 	}
 	if m.process != nil || m.proxySnapshot != nil {
-		t.Fatal("privilege rejection changed networking ownership")
+		t.Fatal("waiting for a core changed networking ownership")
 	}
 }
 

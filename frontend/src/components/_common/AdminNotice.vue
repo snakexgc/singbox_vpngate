@@ -11,17 +11,23 @@ const text = useVPNGateText()
 
 <template>
   <div
-    v-if="envStore.env.os === OS.Windows && !envStore.env.isPrivileged"
+    v-if="
+      envStore.env.os === OS.Windows &&
+      !envStore.env.isPrivileged &&
+      (vpn.state?.settings.tunEnabled ||
+        vpn.state?.runtime.requiresAdmin ||
+        vpn.state?.repair.requiresAdmin)
+    "
     class="admin-notice"
     role="alert"
   >
     <Icon icon="messageWarn" :size="20" class="admin-notice-icon" aria-hidden="true" />
     <div class="admin-notice-copy">
-      <strong>{{ text('未以管理员身份运行 · Administrator rights required') }}</strong>
+      <strong>{{ text('需要管理员权限 · Administrator rights required') }}</strong>
       <p>
         {{
           text(
-            '请以管理员身份重启，以正常使用 TUN 和网络接管功能。 · Restart as administrator to use TUN and manage system traffic.',
+            'TUN 或网络修复需要管理员权限。 · TUN or network repair requires administrator rights.',
           )
         }}
       </p>
@@ -32,7 +38,7 @@ const text = useVPNGateText()
       :disabled="!!vpn.busy"
       :loading="vpn.busy === 'runtime.elevate'"
       @click="vpn.run('runtime.elevate', undefined)"
-      >{{ text('以管理员身份重启 · Restart as administrator') }}</Button
+      >{{ text('管理员重启 · Restart as admin') }}</Button
     >
   </div>
 </template>

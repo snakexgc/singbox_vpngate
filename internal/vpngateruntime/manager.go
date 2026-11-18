@@ -24,44 +24,52 @@ type Protection interface {
 }
 
 type Manager struct {
-	mu             sync.Mutex
-	op             sync.Mutex
-	dir            string
-	guard          Protection
-	settings       vpngate.Settings
-	pool           *vpngate.Pool
-	selected       string
-	runtime        vpngate.RuntimeState
-	rules          vpngate.RulesState
-	jobs           map[string]*vpngate.Job
-	cancels        map[string]context.CancelFunc
-	ctx            context.Context
-	cancel         context.CancelFunc
-	process        *coreProcess
-	proxySnapshot  *systemProxySnapshot
-	desktop        bool
-	corePath       string
-	selectedCore   string
-	coreHTTPClient func(vpngate.Upstream) (*http.Client, error)
-	isAdmin        func() bool
-	restoreProxy   func() error
-	applyProxy     func(int) error
-	resolveOwner   func(context.Context, string, int) ([]string, error)
-	repair         vpngate.RepairState
-	repairing      bool
-	stopping       bool
-	closed         bool
-	jobDone        map[string]chan struct{}
+	mu                 sync.Mutex
+	op                 sync.Mutex
+	dir                string
+	guard              Protection
+	settings           vpngate.Settings
+	pool               *vpngate.Pool
+	selected           string
+	runtime            vpngate.RuntimeState
+	logLevel           string
+	coreLogs           vpngate.LogBuffer
+	rules              vpngate.RulesState
+	jobs               map[string]*vpngate.Job
+	cancels            map[string]context.CancelFunc
+	ctx                context.Context
+	cancel             context.CancelFunc
+	process            *coreProcess
+	proxySnapshot      *systemProxySnapshot
+	desktop            bool
+	corePath           string
+	selectedCore       string
+	coreHTTPClient     func(vpngate.Upstream) (*http.Client, error)
+	isAdmin            func() bool
+	restoreProxy       func() error
+	applyProxy         func(int) error
+	resolveOwner       func(context.Context, string, int) ([]string, error)
+	verifyEndpoint     func(context.Context, vpngate.Settings) error
+	startupAttempted   bool
+	startupPendingCore bool
+	repair             vpngate.RepairState
+	repairing          bool
+	stopping           bool
+	closed             bool
+	jobDone            map[string]chan struct{}
+	scheduleState      updateSchedule
 }
 
 type persisted struct {
 	Settings      vpngate.Settings     `json:"settings"`
+	LogLevel      string               `json:"logLevel,omitempty"`
 	Nodes         []vpngate.Node       `json:"nodes"`
 	Selected      string               `json:"selectedNodeId"`
 	Armed         bool                 `json:"armed"`
 	Proxy         *systemProxySnapshot `json:"proxy,omitempty"`
 	RuntimeActive bool                 `json:"runtimeActive,omitempty"`
 	SelectedCore  string               `json:"selectedCore,omitempty"`
+	Schedule      updateSchedule       `json:"schedule"`
 }
 
 func New(dataDir string, guard Protection) (*Manager, error) {
@@ -82,13 +90,16 @@ func newManager(dataDir string, guard Protection, corePath string, desktop bool)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{dir: dataDir, guard: guard, settings: vpngate.DefaultSettings(), pool: vpngate.NewPool(nil), runtime: vpngate.RuntimeState{Status: "stopped"}, jobs: map[string]*vpngate.Job{}, cancels: map[string]context.CancelFunc{}, ctx: ctx, cancel: cancel}
+	m.logLevel = vpngate.DefaultLogLevel
 	m.desktop, m.corePath, m.isAdmin = desktop, corePath, desktopElevated
 	m.coreHTTPClient = proxyClient
 	m.jobDone = map[string]chan struct{}{}
 	m.restoreProxy, m.applyProxy = m.restoreSystemProxy, m.applySystemProxy
 	m.resolveOwner = resolveUpstreamOwner
+	m.verifyEndpoint = verifyProductionEndpoint
 	if desktop {
 		m.settings.CorePath = corePath
+		m.settings.TUNEnabled, m.settings.SystemProxyEnabled = false, false
 	} else {
 		m.settings.CorePath = guardian.ManagedCorePath()
 	}
@@ -100,6 +111,10 @@ func newManager(dataDir string, guard Protection, corePath string, desktop bool)
 			return nil, fmt.Errorf("读取 VPNGate 状态：%w", err)
 		}
 		m.settings = p.Settings
+		if vpngate.ValidLogLevel(p.LogLevel) {
+			m.logLevel = p.LogLevel
+		}
+		m.scheduleState = p.Schedule
 		if desktop && p.SelectedCore != "" {
 			selected, selectionErr := ownedCorePath(dataDir, p.SelectedCore)
 			if selectionErr != nil {
@@ -109,6 +124,7 @@ func newManager(dataDir string, guard Protection, corePath string, desktop bool)
 			m.selectedCore, m.corePath = p.SelectedCore, selected
 		}
 		for i := range p.Nodes {
+			migrateEgressCacheKey(p.Settings, &p.Nodes[i])
 			if p.Nodes[i].Status == "testing" {
 				p.Nodes[i].Status = "untested"
 				p.Nodes[i].LatencyMs = nil
@@ -136,6 +152,7 @@ func newManager(dataDir string, guard Protection, corePath string, desktop bool)
 		}
 	}
 	m.inspectRulesLocked()
+	m.initializeUpdateSchedule()
 	if guard != nil || desktop {
 		go m.schedule()
 	}
@@ -187,11 +204,15 @@ func (m *Manager) stateLocked() vpngate.State {
 	}
 	m.runtime.Protected = protected
 	m.runtime.RequiresAdmin = m.desktop && m.settings.TUNEnabled && !m.isAdmin()
-	return vpngate.State{Settings: m.settings, Nodes: nodes, SelectedNodeID: m.selected, Runtime: m.runtime, Rules: m.rules, Jobs: jobs, Repair: m.repair, Service: vpngate.ServiceState{Installed: m.guard != nil, Running: m.guard != nil, Protected: protected, RequiresAdmin: !m.desktop && m.guard == nil}}
+	runtime := m.runtime
+	if m.process != nil {
+		runtime.LogLevel = m.process.logLevel
+	}
+	return vpngate.State{Settings: m.settings, LogLevel: m.logLevel, Nodes: nodes, SelectedNodeID: m.selected, Runtime: runtime, Rules: m.rules, Jobs: jobs, Repair: m.repair, Service: vpngate.ServiceState{Installed: m.guard != nil, Running: m.guard != nil, Protected: protected, RequiresAdmin: !m.desktop && m.guard == nil}}
 }
 func (m *Manager) State() vpngate.State { m.mu.Lock(); defer m.mu.Unlock(); return m.stateLocked() }
 func (m *Manager) persistLocked() error {
-	p := persisted{Settings: m.settings, Nodes: m.pool.Snapshot(), Selected: m.selected, SelectedCore: m.selectedCore, Armed: !m.desktop && m.runtime.Status != "stopped" && m.settings.RoutingPreset != "direct", Proxy: m.proxySnapshot, RuntimeActive: m.desktop && (m.process != nil || m.runtime.Status == "starting" || m.repair.Needed)}
+	p := persisted{Settings: m.settings, LogLevel: m.logLevel, Nodes: m.pool.Snapshot(), Selected: m.selected, SelectedCore: m.selectedCore, Armed: !m.desktop && m.runtime.Status != "stopped" && m.settings.RoutingPreset != "direct", Proxy: m.proxySnapshot, RuntimeActive: m.desktop && (m.process != nil || m.runtime.Status == "starting" || m.repair.Needed), Schedule: m.scheduleState}
 	data, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		return err
@@ -243,6 +264,14 @@ func RestoreProxySnapshot(dataDir string) error {
 
 func (m *Manager) Handle(ctx context.Context, method string, payload json.RawMessage) (any, error) {
 	switch method {
+	case "logs.level":
+		var p struct {
+			Level string `json:"level"`
+		}
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return nil, err
+		}
+		return m.setLogLevel(p.Level)
 	case "core.status":
 		return m.coreStatus(ctx), nil
 	case "core.releases":
@@ -271,34 +300,40 @@ func (m *Manager) Handle(ctx context.Context, method string, payload json.RawMes
 		m.op.Lock()
 		defer m.op.Unlock()
 		m.mu.Lock()
+		if m.desktop && (m.closed || m.repairing || m.stopping) {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("软件正在停止或修复，请稍后重试")
+		}
 		if m.coreInstallingLocked() {
 			m.mu.Unlock()
 			return nil, fmt.Errorf("内核正在安装，请完成或取消后重试")
 		}
-		old := m.settings
-		active := m.activeNodeLocked()
 		// The service executes only its ACL-protected binary, never arbitrary editor paths.
 		if m.guard != nil {
 			s.CorePath = guardian.ManagedCorePath()
 		} else if m.desktop {
 			s.CorePath = m.corePath
 		}
-		m.settings = s
-		m.pool.Optimize(s.PoolCapacity, active)
-		m.reconcileSelectionLocked()
-		if fingerprint(old) != fingerprint(s) {
-			for _, n := range m.pool.Snapshot() {
-				m.pool.UpdateProbe(vpngate.ProbeResult{NodeID: n.ID, Status: "untested"})
-			}
-		}
 		running := m.process != nil
-		err := m.persistLocked()
-		m.mu.Unlock()
-		if err != nil {
-			return nil, err
-		}
-		if running {
-			if err = m.connect(ctx); err != nil {
+		tunNeedsRestart := m.desktop && s.TUNEnabled != m.settings.TUNEnabled && s.TUNEnabled != m.runtime.TUNEnabled && m.isAdmin()
+		allowTUNFallback := m.desktop && running && s.TUNEnabled == m.settings.TUNEnabled && !m.runtime.TUNEnabled
+		if running && m.desktop && !tunNeedsRestart && capturePreferencesOnlyChanged(m.settings, s) {
+			m.mu.Unlock()
+			if err := m.updateRunningCapturePreferences(s); err != nil {
+				return nil, err
+			}
+		} else if running {
+			m.mu.Unlock()
+			// Keep the effective settings until candidate preflight succeeds and
+			// the old process is durably detached for replacement.
+			if err := m.connectWithSettings(ctx, s, allowTUNFallback); err != nil {
+				return nil, err
+			}
+		} else {
+			m.updateSettingsLocked(s)
+			err := m.persistLocked()
+			m.mu.Unlock()
+			if err != nil {
 				return nil, err
 			}
 		}
@@ -370,6 +405,12 @@ func (m *Manager) Handle(ctx context.Context, method string, payload json.RawMes
 			return nil, err
 		}
 		return m.stateLocked(), nil
+	case "runtime.startup":
+		if !m.desktop {
+			return nil, fmt.Errorf("自动启动仅适用于独立桌面模式")
+		}
+		err := m.startDesktop(ctx, false)
+		return m.State(), err
 	case "connect":
 		m.op.Lock()
 		defer m.op.Unlock()
@@ -430,6 +471,20 @@ func (m *Manager) Handle(ctx context.Context, method string, payload json.RawMes
 		return nil, fmt.Errorf("未知 VPNGate 操作：%s", method)
 	}
 }
+func (m *Manager) updateSettingsLocked(s vpngate.Settings) {
+	old := m.settings
+	m.settings = s
+	if egressCacheKey(old, vpngate.Node{}) != egressCacheKey(s, vpngate.Node{}) {
+		m.pool.InvalidateEgress()
+	}
+	m.pool.Optimize(s.PoolCapacity, m.activeNodeLocked())
+	m.reconcileSelectionLocked()
+	if fingerprint(old) != fingerprint(s) {
+		for _, n := range m.pool.Snapshot() {
+			m.pool.UpdateProbe(vpngate.ProbeResult{NodeID: n.ID, Status: "untested"})
+		}
+	}
+}
 func (m *Manager) reconcileSelectionLocked() {
 	if m.selected == "" {
 		return
@@ -442,13 +497,28 @@ func (m *Manager) reconcileSelectionLocked() {
 	m.selected = ""
 }
 func (m *Manager) activeNodeLocked() string {
-	if m.runtime.ConnectedNodeID != "" {
-		return m.runtime.ConnectedNodeID
-	}
 	if m.runtime.Status == "starting" {
 		return m.selected
 	}
+	if m.process != nil && m.process.nodeID != "" {
+		return m.process.nodeID
+	}
+	if m.runtime.ConnectedNodeID != "" {
+		return m.runtime.ConnectedNodeID
+	}
 	return ""
+}
+
+func (m *Manager) runtimeBlocksCoreChangeLocked() bool {
+	if m.process != nil {
+		return true
+	}
+	switch m.runtime.Status {
+	case "starting", "connecting", "connected", "direct", "offline", "protected", "degraded":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *Manager) beginJob(kind string) (context.Context, *vpngate.Job, error) {
@@ -457,7 +527,7 @@ func (m *Manager) beginJob(kind string) (context.Context, *vpngate.Job, error) {
 	if m.closed || m.repairing || m.stopping || m.ctx.Err() != nil {
 		return nil, nil, fmt.Errorf("软件正在停止或修复，请稍后重试")
 	}
-	if kind == "core" && (m.process != nil || m.runtime.Status == "starting" || m.runtime.Status == "connected" || m.runtime.Status == "direct" || m.runtime.Status == "degraded" || m.runtime.Status == "protected") {
+	if kind == "core" && m.runtimeBlocksCoreChangeLocked() {
 		return nil, nil, fmt.Errorf("请先停止连接，再安装或切换内核")
 	}
 	for _, j := range m.jobs {
@@ -470,6 +540,18 @@ func (m *Manager) beginJob(kind string) (context.Context, *vpngate.Job, error) {
 	m.jobs[j.ID] = j
 	m.cancels[j.ID] = cancel
 	m.jobDone[j.ID] = make(chan struct{})
+	previousSchedule := m.scheduleState
+	if m.scheduleState.recordAttempt(kind, time.Now()) {
+		if err := m.persistLocked(); err != nil {
+			m.scheduleState = previousSchedule
+			cancel()
+			delete(m.jobs, j.ID)
+			delete(m.cancels, j.ID)
+			close(m.jobDone[j.ID])
+			delete(m.jobDone, j.ID)
+			return nil, nil, fmt.Errorf("保存自动更新计时：%w", err)
+		}
+	}
 	if len(m.jobs) > 30 {
 		for k, v := range m.jobs {
 			if v.Status != "running" {
@@ -490,6 +572,7 @@ func (m *Manager) finishJob(j *vpngate.Job, err error) {
 		j.Message = err.Error()
 	} else {
 		j.Status = "completed"
+		m.scheduleState.recordSuccess(j.Kind, time.Now())
 	}
 	j.FinishedAt = now()
 	delete(m.cancels, j.ID)
@@ -506,29 +589,20 @@ func (m *Manager) finishJob(j *vpngate.Job, err error) {
 func (m *Manager) schedule() {
 	timer := time.NewTimer(2 * time.Second)
 	defer timer.Stop()
-	lastRefresh := time.Time{}
-	lastRules := time.Time{}
 	for {
 		select {
 		case <-m.ctx.Done():
 			return
 		case <-timer.C:
-			m.mu.Lock()
-			s := m.settings
-			count := len(m.pool.Snapshot())
+			s, refreshDue, rulesDue := m.scheduledUpdatesDue(time.Now())
 			ready := s.Upstream.Port > 0
-			m.mu.Unlock()
 			coreInfo, coreErr := os.Stat(s.CorePath)
 			ready = ready && coreErr == nil && coreInfo.Mode().IsRegular()
-			if ready && count < s.PoolCapacity && time.Since(lastRefresh) >= time.Duration(s.RefreshMinutes)*time.Minute {
-				if _, err := m.startRefresh(false); err == nil {
-					lastRefresh = time.Now()
-				}
+			if ready && refreshDue {
+				_, _ = m.startRefresh(false)
 			}
-			if ready && s.RulesAutoUpdate && time.Since(lastRules) >= time.Duration(s.RulesUpdateHours)*time.Hour {
-				if _, err := m.startRules(); err == nil {
-					lastRules = time.Now()
-				}
+			if ready && rulesDue {
+				_, _ = m.startRules()
 			}
 			timer.Reset(time.Minute)
 		}

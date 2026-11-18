@@ -113,6 +113,8 @@ function mountButton(
   const app = renderer.createApp({
     render: () => Vue.h(Button, state, label ? { default: label } : {}),
   })
+  // Use the production registration expected by the compiled Button template.
+  // eslint-disable-next-line vue/multi-word-component-names
   app.component('Icon', Icon)
   app.mount(container)
   context.after(() => app.unmount())
@@ -139,6 +141,28 @@ function flowShape(node) {
     },
   ]
 }
+
+test('renders a native non-submit button while preserving custom roles and accessible labels', (context) => {
+  const { root } = mountButton(context, {
+    role: 'tab',
+    'aria-label': 'Refresh VPNGate nodes',
+  })
+  assert.equal(root.type, 'button', 'native buttons support keyboard focus and activation')
+  assert.equal(root.props.type, 'button', 'actions must not submit a surrounding form')
+  assert.equal(root.props.role, 'tab')
+  assert.equal(root.props['aria-label'], 'Refresh VPNGate nodes')
+  assert.equal(root.props.disabled, false)
+  assert.equal(root.props['aria-busy'], undefined)
+})
+
+test('decorative button icons stay out of the accessible name', (context) => {
+  const { root } = mountButton(context, { icon: 'refresh', loading: true })
+  const icon = descendants(root).find((node) => node.props.innerHTML === icons.refresh)
+  assert.ok(icon)
+  let decorative = icon
+  while (decorative && decorative.props['aria-hidden'] !== 'true') decorative = decorative.parent
+  assert.ok(decorative, 'a decorative icon must have an aria-hidden ancestor')
+})
 
 for (const [size, dimension] of [
   ['default', '16px'],
@@ -221,7 +245,7 @@ test('loading exposes a visible spinner overlay while keeping the original conte
   assert.notEqual(computedStyle(hiddenContent).visibility, 'hidden')
 })
 
-test('disabled and loading preserve aria and pointer blocking without inserting a forbidden glyph', async (context) => {
+test('disabled and loading block native activation and expose their states without a forbidden glyph', async (context) => {
   const { state, root } = mountButton(context, {})
   assert.equal(root.props.role, 'button')
   for (const next of [
@@ -231,13 +255,17 @@ test('disabled and loading preserve aria and pointer blocking without inserting 
   ]) {
     Object.assign(state, next)
     await Vue.nextTick()
+    assert.equal(root.props.disabled, true, 'native disabled blocks mouse and keyboard activation')
     assert.equal(root.props['aria-disabled'], true)
+    assert.equal(root.props['aria-busy'], next.loading ? true : undefined)
     assert.equal(computedStyle(root)['pointer-events'], 'none')
     if (next.disabled) assert.equal(computedStyle(root).opacity, '0.5')
     assert.ok(!descendants(root).some((node) => node.props.innerHTML === icons.forbidden))
   }
   Object.assign(state, { disabled: false, loading: false })
   await Vue.nextTick()
+  assert.equal(root.props.disabled, false)
   assert.equal(root.props['aria-disabled'], undefined)
+  assert.equal(root.props['aria-busy'], undefined)
   assert.notEqual(computedStyle(root)['pointer-events'], 'none')
 })

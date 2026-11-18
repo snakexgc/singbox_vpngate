@@ -329,3 +329,36 @@ func TestDNSCaptureAndDomainRemoteBootstrapCannotLeakOrLoop(t *testing.T) {
 		t.Fatal("DNS hijack relies on sniffing that is not enabled")
 	}
 }
+
+func TestConfigUsesCurrentTUNDNSOptions(t *testing.T) {
+	s := configuredSettings()
+	s.RoutingPreset = "global"
+	raw, err := BuildConfig(s, nil, ConfigOptions{Production: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(raw, &config); err != nil {
+		t.Fatal(err)
+	}
+	foundTUN := false
+	for _, inbound := range config["inbounds"].([]any) {
+		tun := inbound.(map[string]any)
+		if tun["type"] != "tun" {
+			continue
+		}
+		foundTUN = true
+		if tun["dns_mode"] != "hijack" || tun["strict_route"] != true {
+			t.Fatal("TUN must explicitly capture DNS and block Windows multihomed DNS leakage", tun)
+		}
+		if _, legacy := tun["stack"]; legacy {
+			t.Fatal("use the core's default stack instead of a deprecated selection")
+		}
+	}
+	if !foundTUN {
+		t.Fatal("enabled production TUN is missing")
+	}
+	if _, legacy := config["dns"].(map[string]any)["independent_cache"]; legacy {
+		t.Fatal("independent_cache is deprecated since the minimum supported core version")
+	}
+}

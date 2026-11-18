@@ -1,122 +1,118 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch, onActivated, useTemplateRef } from 'vue'
+import { computed, onActivated, onMounted, onUnmounted, ref, useTemplateRef } from 'vue'
 
 import { formatBytes } from '@/utils'
 
 interface Props {
-  height?: number
-  padding?: number
   legend?: string[]
-  series: number[][]
+  series: [number[], number[]]
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  height: 214,
-  padding: 50,
   legend: () => ['upload', 'download'],
 })
 
 const MAX_HISTORY = 60
-const svgRef = useTemplateRef<SVGAElement>('svgRef')
+const TICK_COUNT = 8
+const PLOT_LEFT = 50
+const PLOT_TOP = 24
+const chart = useTemplateRef<HTMLDivElement>('chart')
 const width = ref(200)
-const points = ref<string[]>([])
+const height = ref(214)
 const showLines = ref([true, true])
-const fillColors = ['#8851e350', '#2e9ae550']
+const fillColors = [
+  'color-mix(in srgb, var(--chart-upload) 24%, transparent)',
+  'color-mix(in srgb, var(--chart-download) 24%, transparent)',
+]
 
-const strokeColors = computed(() => {
-  const upload = showLines.value[0] ? '#8851e3' : 'gray'
-  const download = showLines.value[1] ? '#2e9ae5' : 'gray'
-  return [upload, download]
-})
+const strokeColors = ['var(--chart-upload)', 'var(--chart-download)']
 
-const maxValue = computed(() => {
-  const maxUpload = Math.max(...props.series[0]!, props.height)
-  const maxDownload = Math.max(...props.series[1]!, props.height)
-  if (showLines.value[0] && showLines.value[1]) return Math.max(maxUpload, maxDownload)
-  if (showLines.value[0]) return maxUpload
-  if (showLines.value[1]) return maxDownload
-  return props.height
-})
+const maxValue = computed(() =>
+  Math.max(
+    1024,
+    ...props.series.flatMap((samples, index) => (showLines.value[index] ? samples : [])),
+  ),
+)
+const bottom = computed(() => height.value - 9)
+const right = computed(() => Math.max(PLOT_LEFT, width.value - 6))
+const scaleY = (fraction: number) => bottom.value - fraction * (bottom.value - PLOT_TOP)
+const ticks = computed(() =>
+  Array.from({ length: TICK_COUNT }, (_, index) => {
+    const fraction = 1 - index / (TICK_COUNT - 1)
+    return { y: scaleY(fraction), label: formatBytes(maxValue.value * fraction) }
+  }),
+)
+const points = computed(() =>
+  props.series.map((samples, series) => {
+    if (!showLines.value[series]) return ''
+    const spacing = (right.value - PLOT_LEFT) / (MAX_HISTORY - 1)
+    const offset = samples.length - MAX_HISTORY
+    const coordinates = Array.from({ length: MAX_HISTORY }, (_, index) => {
+      const x = Math.round(PLOT_LEFT + index * spacing)
+      const y = Math.round(scaleY((samples[index + offset] ?? 0) / maxValue.value))
+      return x + ',' + y
+    })
+    return [PLOT_LEFT + ',' + bottom.value, ...coordinates, right.value + ',' + bottom.value].join(
+      ' ',
+    )
+  }),
+)
 
-const updateSvgWidth = () => {
-  if (svgRef.value) {
-    width.value = svgRef.value.clientWidth
-    updateChart()
-  }
+const updateChartSize = () => {
+  if (!chart.value?.clientWidth || !chart.value.clientHeight) return
+  width.value = chart.value.clientWidth
+  height.value = chart.value.clientHeight
 }
 
-const updateChart = () => {
-  const { padding } = props
-  let { height } = props
-  const paddingY = height / 8
-  height -= paddingY
-  points.value = props.series.map((s, index) => {
-    if (!showLines.value[index]) return ''
-    const newS = [...s]
-    if (newS.length < MAX_HISTORY) {
-      newS.unshift(...Array.from({ length: MAX_HISTORY - s.length }, () => 0))
-    }
-    const spacing = (width.value - padding) / newS.length
-    const point = newS.reduce((p, c, i) => {
-      const x = Math.floor(i * spacing) + padding
-      const y = Math.floor(height - (c / maxValue.value) * height) + paddingY - 6
-      return i === 0 ? x + ',' + y : p + ',' + x + ',' + y
-    }, '')
-    const startPos = padding + ',' + (props.height - 6)
-    const endPos = Math.floor((MAX_HISTORY - 1) * spacing + padding) + ',' + (props.height - 6)
-    return startPos + ',' + point + ',' + endPos
-  })
-}
-
-const toggleUpload = () => {
-  showLines.value[0] = !showLines.value[0]
-  updateChart()
-}
-
-const toggleDownload = () => {
-  showLines.value[1] = !showLines.value[1]
-  updateChart()
-}
-
+let resizeObserver: ResizeObserver | undefined
 onMounted(() => {
-  updateSvgWidth()
-  window.addEventListener('resize', updateSvgWidth)
+  updateChartSize()
+  if (chart.value) {
+    resizeObserver = new ResizeObserver(updateChartSize)
+    resizeObserver.observe(chart.value)
+  }
 })
 
-onUnmounted(() => {
-  window.removeEventListener('resize', updateSvgWidth)
-})
+onUnmounted(() => resizeObserver?.disconnect())
 
-onActivated(updateSvgWidth)
-
-watch(() => props.series, updateChart, { deep: true })
+onActivated(updateChartSize)
 </script>
 
 <template>
-  <div class="gui-traffic-chart rounded-8">
-    <svg ref="svgRef" :height="height + 'px'" width="100%" xmlns="http://www.w3.org/2000/svg">
-      <text
-        v-for="i in 8"
-        :key="i"
-        :y="i * (height / 8) - 4"
-        class="traffic-chart__axis-label"
-        style="font-size: 8px"
-        x="4"
-        fill="var(--primary-color)"
+  <div ref="chart" class="gui-traffic-chart">
+    <div class="chart-legend">
+      <button
+        v-for="(label, index) in legend"
+        :key="index"
+        type="button"
+        :aria-pressed="showLines[index]"
+        :style="{ '--series-color': strokeColors[index] }"
+        @click="showLines[index] = !showLines[index]"
       >
-        {{ formatBytes(maxValue - (i - 1) * (maxValue / 7)) }}
+        <span class="chart-swatch" aria-hidden="true" />{{ label }}
+      </button>
+    </div>
+    <svg width="100%" height="100%" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+      <text
+        v-for="(tick, index) in ticks"
+        :key="index"
+        :y="tick.y + 3"
+        style="font-size: 9px"
+        x="4"
+        fill="var(--ui-accent)"
+      >
+        {{ tick.label }}
       </text>
 
       <line
-        v-for="i in 8"
-        :key="i"
-        :y1="i * (height / 8) - 7"
-        :x2="width - 2"
-        :y2="i * (height / 8) - 7"
-        :x1="padding"
-        class="traffic-chart__grid-line"
+        v-for="(tick, index) in ticks"
+        :key="index"
+        :y1="tick.y"
+        :x2="right"
+        :y2="tick.y"
+        :x1="PLOT_LEFT"
         stroke-dasharray="1 4"
-        stroke="var(--color)"
+        stroke="var(--chart-grid)"
       />
 
       <template v-for="(point, index) in points">
@@ -126,51 +122,62 @@ watch(() => props.series, updateChart, { deep: true })
           :points="point"
           :stroke="strokeColors[index]"
           :fill="fillColors[index]"
-          :class="index === 0 ? 'traffic-chart__series--upload' : 'traffic-chart__series--download'"
           stroke-width="2"
         />
       </template>
-
-      <circle
-        :cx="width / 2 - 40"
-        :fill="strokeColors[0]"
-        r="3"
-        cy="10"
-        class="text-10 cursor-pointer"
-        @click="toggleUpload"
-      />
-      <circle
-        :cx="width / 2 + 20"
-        :fill="strokeColors[1]"
-        r="3"
-        cy="10"
-        class="text-10 cursor-pointer"
-        @click="toggleDownload"
-      />
-      <text
-        :x="width / 2 - 34"
-        :fill="strokeColors[0]"
-        y="14"
-        class="text-10 cursor-pointer"
-        @click="toggleUpload"
-      >
-        {{ legend[0] }}
-      </text>
-      <text
-        :x="width / 2 + 28"
-        :fill="strokeColors[1]"
-        y="14"
-        class="text-10 cursor-pointer"
-        @click="toggleDownload"
-      >
-        {{ legend[1] }}
-      </text>
     </svg>
   </div>
 </template>
 
 <style lang="less" scoped>
 .gui-traffic-chart {
+  --chart-upload: var(--ui-upload);
+  --chart-download: var(--ui-download);
+  --chart-grid: color-mix(in srgb, var(--card-color) 70%, transparent);
+  position: relative;
+  flex: 1;
+  min-height: 214px;
+  border-radius: 8px;
   background: var(--card-bg);
+  svg {
+    position: absolute;
+    inset: 0;
+  }
+}
+.chart-legend {
+  position: absolute;
+  z-index: 1;
+  inset: 2px 0 auto;
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+  button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 20px;
+    padding: 2px 5px;
+    border: 0;
+    border-radius: 4px;
+    color: var(--series-color);
+    background: transparent;
+    font-size: 10px;
+    &:hover {
+      background: var(--ui-surface-soft);
+    }
+    &[aria-pressed='false'] {
+      color: var(--ui-muted);
+      text-decoration: line-through;
+    }
+  }
+}
+.chart-swatch {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+body[feature-no-rounded='true'] .gui-traffic-chart {
+  border-radius: 0;
 }
 </style>

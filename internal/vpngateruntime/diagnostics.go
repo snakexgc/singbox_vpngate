@@ -15,20 +15,7 @@ import (
 // Copy only bounded error evidence before the generated profile/log directory is
 // removed. No certificate/configuration contents or unbounded log file enter State.
 func coreFailureDiagnostic(err error, dir string, upstream vpngate.Upstream) string {
-	redact := func(value string) string {
-		if upstream.Username != "" || upstream.Password != "" {
-			credentials := upstream.Username + ":" + upstream.Password
-			value = strings.ReplaceAll(value, base64.StdEncoding.EncodeToString([]byte(credentials)), "[redacted]")
-		}
-		for _, secret := range []string{upstream.Password, upstream.Username} {
-			if secret == "" {
-				continue
-			}
-			value = strings.ReplaceAll(value, url.QueryEscape(secret), "[redacted]")
-			value = strings.ReplaceAll(value, secret, "[redacted]")
-		}
-		return value
-	}
+	redact := redactUpstream(upstream)
 	message := boundedDiagnostic(redact(err.Error()), 2048)
 	for _, name := range []string{"core.log", "process.log"} {
 		file, openErr := os.Open(filepath.Join(dir, name))
@@ -81,6 +68,21 @@ func coreFailureDiagnostic(err error, dir string, upstream vpngate.Upstream) str
 		}
 	}
 	return boundedDiagnostic(message, 4096)
+}
+
+func redactUpstream(upstream vpngate.Upstream) func(string) string {
+	var replacements []string
+	if upstream.Username != "" || upstream.Password != "" {
+		credentials := upstream.Username + ":" + upstream.Password
+		replacements = append(replacements, base64.StdEncoding.EncodeToString([]byte(credentials)), "[redacted]")
+	}
+	for _, secret := range []string{upstream.Password, upstream.Username} {
+		if secret == "" {
+			continue
+		}
+		replacements = append(replacements, url.QueryEscape(secret), "[redacted]", secret, "[redacted]")
+	}
+	return strings.NewReplacer(replacements...).Replace
 }
 
 func boundedDiagnostic(value string, limit int) string {

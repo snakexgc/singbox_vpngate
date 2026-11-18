@@ -8,6 +8,7 @@ import CoreNotice from './CoreNotice.vue'
 import ModalTabs from './ModalTabs.vue'
 import NavigationBar from './NavigationBar.vue'
 import TitleBar from './TitleBar.vue'
+import VPNGateStatus from './VPNGateStatus.vue'
 
 const route = useRoute()
 const appStore = useAppStore()
@@ -16,7 +17,10 @@ const appSettings = useAppSettingsStore()
 
 <template>
   <div class="flex flex-1 min-h-0">
-    <div class="app-main flex flex-col w-full min-h-0">
+    <div
+      class="app-main flex flex-col w-full min-h-0"
+      :class="{ 'app-main--overview': route.name === 'Overview' }"
+    >
       <TitleBar v-if="!appSettings.systemTitleBarOnStartup" />
       <div class="app-content flex-1 min-h-0 overflow-hidden flex flex-col p-8">
         <div class="app-header">
@@ -24,6 +28,7 @@ const appSettings = useAppSettingsStore()
           <AdminNotice />
           <CoreNotice />
         </div>
+        <div class="app-global-status"><VPNGateStatus /></div>
         <div
           :class="{ 'app-page--overview': route.name === 'Overview' }"
           class="app-page flex flex-1 min-h-0 flex-col overflow-y-auto mt-8 px-8"

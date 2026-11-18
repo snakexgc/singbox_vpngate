@@ -1,7 +1,7 @@
 import type { RouteRecordRaw } from 'vue-router'
 
 import HomeView from '@/views/HomeView/index.vue'
-import RoutingView from '@/views/RoutingView/index.vue'
+import LogsView from '@/views/LogsView/index.vue'
 import SettingsView from '@/views/SettingsView/index.vue'
 import VPNGateView from '@/views/VPNGateView/index.vue'
 
@@ -19,10 +19,15 @@ const routes: RouteRecordRaw[] = [
     meta: { name: 'VPNGate', icon: 'subscriptions', hidden: false },
   },
   {
+    path: '/logs',
+    name: 'Logs',
+    component: LogsView,
+    meta: { name: 'router.logs', icon: 'file', hidden: false },
+  },
+  {
     path: '/routing',
-    name: 'Routing',
-    component: RoutingView,
-    meta: { name: 'router.routing', icon: 'rulesets', hidden: false },
+    redirect: '/',
+    meta: { name: '', hidden: true },
   },
   {
     path: '/settings',

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -169,33 +168,14 @@ func parseByteRange(s string, size int64) (start int64, end int64, err error) {
 	return 0, 0, errors.New("invalid range format")
 }
 
-func RollingRelease(next http.Handler) http.Handler {
-	isDevVersion := strings.Contains(Env.AppVersion, "dev")
+// FrontendCache serves the assets bundled for this app version.
+func FrontendCache(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		url := r.URL.Path
-		isIndex := url == "/"
-
-		if isIndex {
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
 			w.Header().Set("Cache-Control", "no-cache")
 		} else {
 			w.Header().Set("Cache-Control", "max-age=31536000, immutable")
 		}
-
-		if isDevVersion || !Config.RollingRelease {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		if isIndex {
-			url = "/index.html"
-		}
-
-		filePath := resolvePath("data/rolling-release" + url)
-		if _, err := os.Stat(filePath); err != nil {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		http.ServeFile(w, r, filePath)
+		next.ServeHTTP(w, r)
 	})
 }

@@ -21,7 +21,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -123,9 +125,44 @@ func runNativeOpenVPNLoopback(t *testing.T, core, protocol string, authenticate 
 	const tunnelTarget = "192.0.2.123"
 	const tunnelHostname = "native-loopback.invalid"
 	alias := net.JoinHostPort(tunnelHostname, strconv.Itoa(targetPort))
-	dnsPort, dnsRequests := loopbackDNS(t, tunnelHostname, tunnelTarget)
+	var dnsAliases []string
+	var egressPort int
+	var egressRequests atomic.Int64
+	if protocol == "http" {
+		dnsAliases = append(dnsAliases, "ip-api.com")
+		provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Host != "ip-api.com" || r.URL.Path != "/json/" || r.URL.Query().Get("lang") != "zh-CN" {
+				t.Error("native egress request lost its expected provider host, path or language")
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			egressRequests.Add(1)
+			_, _ = io.WriteString(w, egressSuccessBody)
+		}))
+		t.Cleanup(provider.Close)
+		egressPort = provider.Listener.Addr().(*net.TCPAddr).Port
+	}
+	dnsPort, dnsRequests := loopbackDNS(t, tunnelHostname, tunnelTarget, dnsAliases...)
 	vpnPort := loopbackFreePort(t)
 	vpnAddress := net.JoinHostPort("127.0.0.1", strconv.Itoa(vpnPort))
+	routeRules := []any{
+		map[string]any{"ip_cidr": []string{tunnelTarget + "/32"}, "port": []int{targetPort}, "action": "route-options", "override_address": "127.0.0.1"},
+		// BuildConfig's vpn-dns server is 1.1.1.1:53. Only the VPN server
+		// redirects that tunnel destination to the ephemeral local DNS stub.
+		map[string]any{"ip_cidr": []string{"1.1.1.1/32"}, "port": []int{53}, "action": "route-options", "override_address": "127.0.0.1", "override_port": dnsPort},
+		map[string]any{"ip_cidr": []string{tunnelTarget + "/32"}, "port": []int{targetPort}, "action": "route", "outbound": "direct"},
+		map[string]any{"ip_cidr": []string{"1.1.1.1/32"}, "port": []int{53}, "action": "route", "outbound": "direct"},
+		map[string]any{"ip_cidr": []string{"127.0.0.1/32"}, "port": []int{targetPort, dnsPort}, "action": "route", "outbound": "direct"},
+	}
+	if egressPort != 0 {
+		// The candidate asks the local provider only from inside OpenVPN.
+		// DNS resolves the real provider hostname to a test-only address.
+		routeRules = append(routeRules, map[string]any{
+			"ip_cidr": []string{tunnelTarget + "/32"}, "port": []int{80}, "action": "route", "outbound": "direct",
+			"override_address": "127.0.0.1", "override_port": egressPort,
+		})
+	}
+	routeRules = append(routeRules, map[string]any{"action": "reject"})
 	serverConfig := map[string]any{
 		"log": map[string]any{"level": "debug", "timestamp": true},
 		"endpoints": []any{map[string]any{
@@ -135,16 +172,7 @@ func runNativeOpenVPNLoopback(t *testing.T, core, protocol string, authenticate 
 			"tls": map[string]any{"certificate": serverCert, "key": serverKey, "client_certificate": ca, "verify_client_certificate": "require", "remote_certificate_tls": "client"},
 		}},
 		"outbounds": []any{map[string]any{"type": "direct", "tag": "direct"}},
-		"route": map[string]any{"final": "direct", "rules": []any{
-			map[string]any{"ip_cidr": []string{tunnelTarget + "/32"}, "port": []int{targetPort}, "action": "route-options", "override_address": "127.0.0.1"},
-			// BuildConfig's vpn-dns server is 1.1.1.1:53. Only the VPN server
-			// redirects that tunnel destination to the ephemeral local DNS stub.
-			map[string]any{"ip_cidr": []string{"1.1.1.1/32"}, "port": []int{53}, "action": "route-options", "override_address": "127.0.0.1", "override_port": dnsPort},
-			map[string]any{"ip_cidr": []string{tunnelTarget + "/32"}, "port": []int{targetPort}, "action": "route", "outbound": "direct"},
-			map[string]any{"ip_cidr": []string{"1.1.1.1/32"}, "port": []int{53}, "action": "route", "outbound": "direct"},
-			map[string]any{"ip_cidr": []string{"127.0.0.1/32"}, "port": []int{targetPort, dnsPort}, "action": "route", "outbound": "direct"},
-			map[string]any{"action": "reject"},
-		}},
+		"route":     map[string]any{"final": "direct", "rules": routeRules},
 	}
 	serverRaw, err := json.MarshalIndent(serverConfig, "", "  ")
 	if err != nil {
@@ -246,6 +274,17 @@ func runNativeOpenVPNLoopback(t *testing.T, core, protocol string, authenticate 
 	}
 	if bootstrapRequests != nil && bootstrapRequests.Load() == 0 {
 		t.Fatal("native remote hostname was not resolved through the explicit upstream DNS path")
+	}
+	if egressPort != 0 {
+		lookupClient, err := proxyClient(vpngate.Upstream{Host: "127.0.0.1", Port: mixedPort, Protocol: "http"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lookupClient.CloseIdleConnections()
+		location, err := lookupEgress(ctx, lookupClient)
+		if err != nil || egressRequests.Load() != 1 || location.IP != "8.8.4.4" || location.City != "山景城" {
+			t.Fatalf("the native candidate did not carry the provider lookup: requests=%d result=%+v err=%v", egressRequests.Load(), location, err)
+		}
 	}
 	t.Logf("native OpenVPN mutual TLS + DNS + HTTPS passed: upstream=%s authenticated=%t latency=%s sessions=%d upstream_bytes=%d downstream_bytes=%d VPN_DNS=%d target_requests=%d", protocol, authenticate, time.Since(started).Round(time.Millisecond), proxySessions.Load(), sentBytes.Load(), receivedBytes.Load(), dnsRequests.Load(), targetRequests.Load())
 }
@@ -588,7 +627,7 @@ func loopbackSOCKS5Proxy(t *testing.T, allowed, username, password string, rejec
 	return address, &sessions, &sent, &received
 }
 
-func loopbackDNS(t *testing.T, hostname, target string) (int, *atomic.Int64) {
+func loopbackDNS(t *testing.T, hostname, target string, aliases ...string) (int, *atomic.Int64) {
 	t.Helper()
 	var requests atomic.Int64
 	ip := net.ParseIP(target).To4()
@@ -608,7 +647,8 @@ func loopbackDNS(t *testing.T, hostname, target string) (int, *atomic.Int64) {
 			}
 			question := query.Questions[0]
 			response := dnsmessage.Message{Header: dnsmessage.Header{ID: query.ID, Response: true, Authoritative: true, RecursionDesired: query.RecursionDesired, RecursionAvailable: true}, Questions: query.Questions}
-			if question.Name.String() == hostname+"." && question.Type == dnsmessage.TypeA && question.Class == dnsmessage.ClassINET {
+			name := strings.TrimSuffix(question.Name.String(), ".")
+			if (name == hostname || slices.Contains(aliases, name)) && question.Type == dnsmessage.TypeA && question.Class == dnsmessage.ClassINET {
 				requests.Add(1)
 				response.Answers = []dnsmessage.Resource{{Header: dnsmessage.ResourceHeader{Name: question.Name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 60}, Body: &dnsmessage.AResource{A: [4]byte{ip[0], ip[1], ip[2], ip[3]}}}}
 			} else {

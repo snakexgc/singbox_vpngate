@@ -25,9 +25,12 @@ withDefaults(defineProps<Props>(), {
 </script>
 
 <template>
-  <div
+  <button
+    type="button"
     :role="role"
+    :disabled="disabled || loading"
     :aria-disabled="disabled || loading ? true : undefined"
+    :aria-busy="loading ? true : undefined"
     :class="[
       type,
       size,
@@ -53,6 +56,7 @@ withDefaults(defineProps<Props>(), {
         :size="iconSize"
         :color="iconColor || 'currentColor'"
         :class="$slots.default ? 'mr-4' : ''"
+        aria-hidden="true"
       />
       <slot></slot>
     </span>
@@ -68,10 +72,24 @@ withDefaults(defineProps<Props>(), {
         class="rotation"
       />
     </span>
-  </div>
+  </button>
 </template>
 
 <style lang="less" scoped>
+.gui-button {
+  appearance: none;
+  box-sizing: border-box;
+  border: 0;
+  font-family: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+
+  &:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+  }
+}
+
 .button-disabled {
   opacity: 0.5;
 }

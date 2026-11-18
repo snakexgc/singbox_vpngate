@@ -7,7 +7,7 @@ export const migrateAppSettings = async (
   save: () => Promise<string>,
 ) => {
   let needSync = false
-  const managedPages = ['Overview', 'VPNGate', 'Routing', 'Settings']
+  const managedPages = ['Overview', 'VPNGate', 'Settings']
   if (JSON.stringify(settings.pages) !== JSON.stringify(managedPages)) {
     settings.pages = managedPages
     needSync = true

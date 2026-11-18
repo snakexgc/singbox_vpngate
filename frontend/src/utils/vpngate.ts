@@ -24,7 +24,7 @@ export const upstreamProtocolHints: Record<UpstreamProtocol, string> = {
 }
 
 // Settings has no routing control: its draft must preserve the latest mode from
-// Overview/Routing. A successful RPC only commits this draft if no edit followed
+// Overview. A successful RPC only commits this draft if no edit followed
 // its immutable snapshot.
 export const submitVPNGateSettingsDraft = async (
   draft: VPNGateSettings,
@@ -51,13 +51,13 @@ export const defaultVPNGateSettings = (): VPNGateSettings => ({
   refreshMinutes: 30,
   routingPreset: 'bypass-cn',
   mixedPort: 20122,
-  tunEnabled: true,
-  systemProxyEnabled: true,
+  tunEnabled: false,
+  systemProxyEnabled: false,
   testURL: 'https://www.gstatic.com/generate_204',
   testConcurrency: 3,
   testTimeoutSeconds: 45,
   rulesAutoUpdate: true,
-  rulesUpdateHours: 24,
+  rulesUpdateHours: 12,
   cnRulesURL: 'https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/cn.srs',
   gfwRulesURL:
     'https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/gfw.srs',
@@ -73,6 +73,7 @@ export const normalizeVPNGateState = (value: VPNGateStateInput): VPNGateState =>
   const defaults = defaultVPNGateSettings()
   return {
     ...value,
+    logLevel: value.logLevel || 'info',
     settings: {
       ...defaults,
       ...value.settings,
@@ -87,9 +88,12 @@ export const normalizeVPNGateState = (value: VPNGateStateInput): VPNGateState =>
     jobs: value.jobs || [],
     runtime: {
       status: 'stopped',
+      logLevel: '',
       message: '',
       protected: false,
       requiresAdmin: false,
+      tunEnabled: false,
+      systemProxyEnabled: false,
       connectedNodeId: '',
       startedAt: '',
       coreVersion: '',
@@ -111,15 +115,15 @@ export const normalizeVPNGateState = (value: VPNGateStateInput): VPNGateState =>
   }
 }
 
+export const isVPNGateCoreRunning = (status: VPNGateState['runtime']['status'] | undefined) =>
+  status === 'connecting' || status === 'connected' || status === 'direct' || status === 'offline'
+
 export const canConnectVPNGate = (state: VPNGateState | undefined, busy = '') =>
   !!state &&
   !busy &&
   !state.jobs.some((job) => job.kind === 'core' && job.status === 'running') &&
-  !state.runtime.requiresAdmin &&
-  !['starting', 'connected', 'direct'].includes(state.runtime.status) &&
-  !!state.settings.upstream.port &&
-  (state.settings.routingPreset === 'direct' ||
-    state.nodes.some((node) => node.id === state.selectedNodeId))
+  state.runtime.status !== 'starting' &&
+  !isVPNGateCoreRunning(state.runtime.status)
 
 export const validateVPNGateSettings = (settings: VPNGateSettings): string | undefined => {
   const port = (value: number) => Number.isInteger(value) && value > 0 && value <= 65535
@@ -159,14 +163,61 @@ export const validateVPNGateSettings = (settings: VPNGateSettings): string | und
   }
 }
 
+const countryNames = {
+  zh: new Intl.DisplayNames(['zh-CN'], { type: 'region', fallback: 'none' }),
+  en: new Intl.DisplayNames(['en'], { type: 'region', fallback: 'none' }),
+}
+
+export const formatVPNGateCountry = (code?: string, country?: string, locale = 'zh-CN') => {
+  const countryCode = code?.trim().toUpperCase()
+  if (countryCode && /^[A-Z]{2}$/.test(countryCode)) {
+    const names = countryNames[locale.startsWith('zh') ? 'zh' : 'en']
+    return names.of(countryCode) || country?.trim() || countryCode
+  }
+  return country?.trim() || ''
+}
+
+type NodeCountry = Partial<
+  Pick<VPNGateNode, 'country' | 'countryCode' | 'egressCountry' | 'egressCountryCode'>
+>
+
+export const formatVPNGateNodeCountry = (node: NodeCountry, locale = 'zh-CN') =>
+  formatVPNGateCountry(node.egressCountryCode, node.egressCountry, locale) ||
+  formatVPNGateCountry(node.countryCode, node.country, locale)
+
+export const formatVPNGateRegion = (region?: string, city?: string) => {
+  const locations = [region?.trim(), city?.trim()].filter((value): value is string => !!value)
+  return locations
+    .filter(
+      (value, index) =>
+        locations.findIndex((location) => location.toLowerCase() === value.toLowerCase()) === index,
+    )
+    .join(' / ')
+}
+
+export const formatVPNGateEndpoint = (ip: string, port: number) =>
+  `${ip.includes(':') ? `[${ip}]` : ip}:${port}`
+
 export const filterVPNGateNodes = (nodes: VPNGateNode[], query: string, status: string) => {
   const search = query.toLowerCase().trim()
   return nodes.filter(
     (node) =>
       (!status || node.status === status) &&
-      [node.hostname, node.ip, node.country, node.countryCode].some((value) =>
-        value.toLowerCase().includes(search),
-      ),
+      [
+        node.hostname,
+        node.ip,
+        node.country,
+        node.countryCode,
+        node.egressIP,
+        node.egressCountry,
+        node.egressCountryCode,
+        node.egressRegion,
+        node.egressCity,
+        formatVPNGateCountry(node.egressCountryCode, node.egressCountry, 'zh-CN'),
+        formatVPNGateCountry(node.egressCountryCode, node.egressCountry, 'en'),
+        formatVPNGateCountry(node.countryCode, node.country, 'zh-CN'),
+        formatVPNGateCountry(node.countryCode, node.country, 'en'),
+      ].some((value) => value?.toLowerCase().includes(search)),
   )
 }
 
@@ -175,4 +226,4 @@ export const routingOptions = [
   { label: '绕过大陆 · Bypass Mainland', value: 'bypass-cn' },
   { label: '黑名单 · Blacklist', value: 'blacklist' },
   { label: '全局 · Global', value: 'global' },
-]
+] satisfies { label: string; value: RoutingPreset }[]

@@ -74,28 +74,38 @@ const renderCell = (column: Column, record: Recordable) => {
   <div class="gui-table overflow-auto">
     <table class="w-full text-12 border-collapse">
       <thead>
-        <tr class="sticky top-0 shadow">
+        <tr class="sticky top-0">
           <th
             v-for="column in tableColumns"
             :key="column.key"
-            class="px-4 py-8 whitespace-nowrap cursor-pointer"
+            :aria-sort="
+              column.sort
+                ? sortField === column.key
+                  ? sortReverse
+                    ? 'descending'
+                    : 'ascending'
+                  : 'none'
+                : undefined
+            "
+            class="px-4 py-8 whitespace-nowrap"
           >
-            <div
-              :role="column.sort ? 'button' : undefined"
+            <component
+              :is="column.sort ? 'button' : 'div'"
+              :type="column.sort ? 'button' : undefined"
               :style="{
-                justifyContent: { left: 'flext-start', center: 'center', right: 'flex-end' }[
+                justifyContent: { left: 'flex-start', center: 'center', right: 'flex-end' }[
                   column.align || 'left'
                 ],
                 minWidth: column.minWidth || 'auto',
               }"
-              class="flex items-center"
-              @click="handleChangeSortField(column.key)"
+              class="table-heading flex items-center"
+              @click="column.sort && handleChangeSortField(column.key)"
             >
               {{ t(column.title) }}
               <div v-if="sortField === column.key && sortFunc">
                 <span class="px-4"> {{ sortReverse ? '↑' : '↓' }} </span>
               </div>
-            </div>
+            </component>
           </th>
         </tr>
       </thead>
@@ -123,6 +133,15 @@ const renderCell = (column: Column, record: Recordable) => {
 </template>
 
 <style lang="less" scoped>
+.table-heading {
+  border: 0;
+  padding: 0;
+  width: 100%;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+}
 table {
   thead {
     tr {

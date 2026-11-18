@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"guiforcores/internal/vpngate"
@@ -83,7 +86,7 @@ func TestMalformedPersistedStateIsNotSilentlyReset(t *testing.T) {
 		t.Fatal("corrupt persisted state silently discarded")
 	}
 }
-func TestFullAutomaticRefreshNeverContactsProxy(t *testing.T) {
+func TestFullAutomaticRefreshContactsConfiguredProxyWhenScheduled(t *testing.T) {
 	m, err := New(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -91,8 +94,21 @@ func TestFullAutomaticRefreshNeverContactsProxy(t *testing.T) {
 	defer m.Close()
 	m.settings.PoolCapacity = 1
 	m.pool = vpngate.NewPool([]vpngate.Node{{ID: "existing", Status: "untested"}})
-	if err = m.refresh(context.Background(), &vpngate.Job{}, false); err != nil {
-		t.Fatalf("full pool attempted network access: %v", err)
+	var requests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Method != http.MethodConnect || r.Host != "www.vpngate.net:443" {
+			t.Errorf("unexpected refresh route: %s %s", r.Method, r.Host)
+		}
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer upstream.Close()
+	m.settings.Upstream = diagnosticUpstream(t, upstream.URL)
+	if err = m.refresh(context.Background(), &vpngate.Job{}, false); err == nil || requests.Load() != 1 {
+		t.Fatalf("full pool skipped the scheduled feed refresh: requests=%d, error=%v", requests.Load(), err)
+	}
+	if len(m.pool.Snapshot()) != 1 || m.pool.Snapshot()[0].ID != "existing" {
+		t.Fatal("failed automatic refresh replaced the existing full pool")
 	}
 }
 func TestRestartPersistenceFailureRetainsProcessOwnership(t *testing.T) {
@@ -109,7 +125,7 @@ func TestRestartPersistenceFailureRetainsProcessOwnership(t *testing.T) {
 	previous := &coreProcess{}
 	m.process = previous
 	m.runtime = vpngate.RuntimeState{Status: "connected", ConnectedNodeID: "working"}
-	_, err = m.detachForRestart(vpngate.RuntimeState{Status: "starting"})
+	_, err = m.detachForRestart(vpngate.RuntimeState{Status: "starting"}, m.settings)
 	if err == nil || m.process != previous || m.runtime.Status != "connected" {
 		t.Fatalf("lost core ownership after write failure: %v", err)
 	}
@@ -163,18 +179,18 @@ func TestTunnelHealthReportsFailureWithoutChangingExitOrTouchingReplacement(t *t
 		t.Fatal(err)
 	}
 	defer m.Close()
-	p := &coreProcess{}
+	p := &coreProcess{nodeID: "chosen"}
 	m.process = p
 	m.runtime = vpngate.RuntimeState{Status: "connected", ConnectedNodeID: "chosen"}
-	m.recordTunnelHealth(p, errors.New("upstream lost"))
+	m.recordTunnelHealth(p, vpngate.Upstream{}, errors.New("upstream lost"))
 	if m.runtime.Status != "protected" || m.runtime.ConnectedNodeID != "chosen" {
 		t.Fatal("failure silently changed selected exit")
 	}
-	m.recordTunnelHealth(&coreProcess{}, nil)
+	m.recordTunnelHealth(&coreProcess{}, vpngate.Upstream{}, nil)
 	if m.runtime.Status != "protected" {
 		t.Fatal("old session health changed replacement state")
 	}
-	m.recordTunnelHealth(p, nil)
+	m.recordTunnelHealth(p, vpngate.Upstream{}, nil)
 	if m.runtime.Status != "connected" {
 		t.Fatal("same selected tunnel recovery not reflected")
 	}

@@ -21,6 +21,11 @@ import (
 
 const ATTACH_PARENT_PROCESS uintptr = ^uintptr(0)
 
+func ShowStartupError(title string, err error) {
+	log.Print(err)
+	_, _ = windows.MessageBox(0, windows.StringToUTF16Ptr(err.Error()), windows.StringToUTF16Ptr(title), windows.MB_OK|windows.MB_ICONERROR)
+}
+
 var (
 	modAdvapi32 = windows.NewLazySystemDLL("advapi32.dll")
 	modKernel32 = windows.NewLazySystemDLL("kernel32.dll")

@@ -3,7 +3,9 @@ package bridge
 import (
 	"embed"
 	"flag"
+	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"os"
@@ -30,7 +32,6 @@ var Env = &EnvResult{
 	WebviewPath:  "",
 	AppId:        "GUI.for.SingBox",
 	AppName:      "",
-	AppVersion:   "v1.29.0",
 	BasePath:     "",
 	DataDir:      "",
 	OS:           sysruntime.GOOS,
@@ -45,10 +46,10 @@ func NewApp() *App {
 	}
 }
 
-func CreateApp(fs embed.FS) *App {
+func CreateApp(assets embed.FS) (*App, error) {
 	exePath, err := os.Executable()
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	Env.BasePath = filepath.ToSlash(filepath.Dir(exePath))
@@ -56,7 +57,13 @@ func CreateApp(fs embed.FS) *App {
 
 	dataDir, portable, restartFrom := parseArgs(os.Args[1:])
 	waitForExit(restartFrom)
-	initDataDir(dataDir, portable)
+	if Env.OS == "windows" {
+		if err := initWindowsDataDir(dataDir); err != nil {
+			return nil, err
+		}
+	} else {
+		initDataDir(dataDir, portable)
+	}
 
 	if priv, err := IsPrivileged(); err == nil {
 		Env.IsPrivileged = priv
@@ -69,14 +76,16 @@ func CreateApp(fs embed.FS) *App {
 	}
 
 	if Env.OS == "windows" {
-		processFixedWebView2Runtime()
+		if err := processFixedWebView2Runtime(); err != nil {
+			return nil, err
+		}
 	}
 
-	extractEmbeddedFiles(fs)
+	extractEmbeddedFiles(assets)
 
 	loadConfig()
 
-	return app
+	return app, nil
 }
 
 func (a *App) IsStartup() bool {
@@ -254,39 +263,29 @@ func createMacOSMenus(app *App) {
 	app.AppMenu.Append(menu.EditMenu())
 }
 
-func processFixedWebView2Runtime() {
+func processFixedWebView2Runtime() error {
 	webviewDir := filepath.Join(Env.DataDir, "WebView2")
-
-	err := filepath.Walk(webviewDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if !info.IsDir() && strings.EqualFold(info.Name(), "msedgewebview2.exe") {
-			Env.WebviewPath = filepath.Dir(path)
-			log.Printf("WebView2 runtime already exists at: %s", Env.WebviewPath)
-			return filepath.SkipDir
-		}
-		return nil
-	})
-
-	if err != nil {
-		log.Printf("Error during recursive search: %v\n", err)
-		return
-	}
-
-	if Env.WebviewPath != "" {
-		return
-	}
-
 	entries, err := os.ReadDir(webviewDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
 	if err != nil {
-		log.Printf("Failed to read directory: %v\n", err)
-		return
+		return err
+	}
+	actualDir, err := filepath.EvalSymlinks(webviewDir)
+	if err != nil {
+		return err
+	}
+	if !strictlyInside(Env.DataDir, actualDir) {
+		return fmt.Errorf("WebView2 运行库必须位于本地数据目录内：%s", webviewDir)
+	}
+	if Env.WebviewPath, err = findFixedWebView2(actualDir); err != nil || Env.WebviewPath != "" {
+		return err
 	}
 
 	var cabFile string
 	for _, e := range entries {
-		if !e.IsDir() &&
+		if e.Type().IsRegular() &&
 			strings.HasSuffix(strings.ToLower(e.Name()), ".cab") &&
 			strings.Contains(e.Name(), "Microsoft.WebView2.FixedVersionRuntime") {
 			cabFile = filepath.Join(webviewDir, e.Name())
@@ -295,8 +294,7 @@ func processFixedWebView2Runtime() {
 	}
 
 	if cabFile == "" {
-		log.Println("No WebView2 .cab file found. Skipping extraction.")
-		return
+		return nil
 	}
 
 	log.Printf("Found CAB file: %s\n", cabFile)
@@ -306,12 +304,30 @@ func processFixedWebView2Runtime() {
 
 	log.Println("Extracting WebView2 Runtime...")
 	if err := cmd.Run(); err != nil {
-		log.Printf("Extraction failed: %v\n", err)
-		return
+		return fmt.Errorf("解压本地 WebView2 运行库：%w", err)
 	}
+	if Env.WebviewPath, err = findFixedWebView2(actualDir); err != nil {
+		return err
+	}
+	if Env.WebviewPath == "" {
+		return fmt.Errorf("解压后未在 %q 找到 WebView2 运行库", webviewDir)
+	}
+	return nil
+}
 
-	log.Printf("WebView2 Runtime extracted successfully into: %s\n", webviewDir)
-	Env.WebviewPath = strings.TrimSuffix(cabFile, ".cab")
+func findFixedWebView2(dir string) (string, error) {
+	var runtimeDir string
+	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type().IsRegular() && strings.EqualFold(entry.Name(), "msedgewebview2.exe") {
+			runtimeDir = filepath.Dir(path)
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return runtimeDir, err
 }
 
 func extractEmbeddedFiles(fs embed.FS) {

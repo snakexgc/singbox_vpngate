@@ -5,11 +5,16 @@ package bridge
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"syscall"
 	"time"
 )
+
+func ShowStartupError(_ string, err error) {
+	log.Print(err)
+}
 
 func DecodeCommandOutput(data []byte) string {
 	return string(data)

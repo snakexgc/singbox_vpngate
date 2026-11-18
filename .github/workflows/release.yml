@@ -10,6 +10,14 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Verify release version
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $version = (Get-Content -LiteralPath VERSION -Raw).Trim()
+          if ($env:GITHUB_REF_NAME -cne $version) {
+            throw "Release tag '$env:GITHUB_REF_NAME' does not match VERSION '$version'."
+          }
       - uses: pnpm/action-setup@v6
         with:
           version: 12
@@ -40,7 +48,10 @@ jobs:
           name: SingBox-VPNGate-windows-amd64
           path: build/bin/SingBox-VPNGate-Desktop-windows-amd64.zip
       - name: Publish tagged release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v3
         with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
           files: build/bin/SingBox-VPNGate-Desktop-windows-amd64.zip

@@ -122,7 +122,7 @@ export const useAppSettingsStore = defineStore('app-settings', () => {
     debugNoRounded: false,
     debugBorder: false,
     debugUsePointer: false,
-    pages: ['Overview', 'VPNGate', 'Routing', 'Settings'],
+    pages: ['Overview', 'VPNGate', 'Settings'],
   })
 
   const systemTitleBarOnStartup = ref(false)

@@ -62,6 +62,17 @@ func TestOfficialCoreCheck(t *testing.T) {
 			})
 		}
 	}
+	t.Run("remote-upstream-with-tun", func(t *testing.T) {
+		s := configuredSettings()
+		s.Upstream.Host = "proxy.example.org"
+		s.TUNEnabled = true
+		s.RoutingPreset = "global"
+		raw, err := BuildConfig(s, &node, ConfigOptions{Production: true, ControllerPort: 20123})
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkCoreConfig(t, core, raw)
+	})
 	t.Run("probe", func(t *testing.T) {
 		raw, err := BuildConfig(configuredSettings(), &node, ConfigOptions{MixedPort: 24133})
 		if err != nil {

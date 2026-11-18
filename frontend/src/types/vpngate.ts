@@ -1,5 +1,12 @@
 export type RoutingPreset = 'direct' | 'bypass-cn' | 'blacklist' | 'global'
 export type UpstreamProtocol = 'socks4' | 'socks4a' | 'socks5' | 'http'
+export type CoreLogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'panic'
+export interface VPNGateLogEntry {
+  id: number
+  time: string
+  level: CoreLogLevel | ''
+  message: string
+}
 export interface VPNGateSettings {
   upstream: {
     host: string
@@ -28,8 +35,19 @@ export interface VPNGateNode {
   id: string
   hostname: string
   ip: string
+  // VPNGate feed location can differ from the exit measured through the tunnel.
   country: string
   countryCode: string
+  // Optional for nodes persisted before egress lookup support.
+  egressIP?: string
+  egressCountry?: string
+  egressCountryCode?: string
+  egressRegion?: string
+  egressCity?: string
+  egressError?: string
+  egressCheckedAt?: string
+  egressLanguage?: string
+  egressCacheKey?: string
   port: number
   protocol: string
   score: number
@@ -58,13 +76,26 @@ export interface VPNGateJob {
 }
 export interface VPNGateState {
   settings: VPNGateSettings
+  logLevel: CoreLogLevel
   nodes: VPNGateNode[]
   selectedNodeId: string
   runtime: {
-    status: 'stopped' | 'starting' | 'connected' | 'protected' | 'error' | 'direct'
+    logLevel: CoreLogLevel | ''
+    status:
+      | 'stopped'
+      | 'starting'
+      | 'connecting'
+      | 'connected'
+      | 'offline'
+      | 'protected'
+      | 'degraded'
+      | 'error'
+      | 'direct'
     message: string
     protected: boolean
     requiresAdmin: boolean
+    tunEnabled: boolean
+    systemProxyEnabled: boolean
     connectedNodeId: string
     startedAt: string
     coreVersion: string
@@ -97,6 +128,11 @@ export interface CoreRelease {
   publishedAt: string
 }
 export interface VPNGateMethods {
+  'logs.read': {
+    payload: { app: number; core: number }
+    result: { app: VPNGateLogEntry[]; core: VPNGateLogEntry[] }
+  }
+  'logs.level': { payload: { level: CoreLogLevel }; result: VPNGateState }
   'core.status': { payload: undefined; result: CoreStatus }
   'core.releases': { payload: undefined; result: { releases: CoreRelease[] } }
   'core.install': { payload: { version: string }; result: VPNGateJob }

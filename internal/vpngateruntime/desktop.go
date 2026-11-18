@@ -7,9 +7,70 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"guiforcores/internal/vpngate"
 )
+
+// Startup runs after the Wails single-instance check. If the compatible core
+// has yet to be installed, the first successful install or selection resumes
+// startup, unless the user has since stopped the runtime.
+func (m *Manager) startDesktop(ctx context.Context, afterCoreReady bool) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(m.ctx, cancel)
+	defer stop()
+	m.op.Lock()
+	defer m.op.Unlock()
+	m.mu.Lock()
+	if ctx.Err() != nil || m.closed || m.repairing || m.stopping || m.repair.Needed || m.process != nil ||
+		(afterCoreReady && !m.startupPendingCore) || (!afterCoreReady && m.startupAttempted) {
+		m.mu.Unlock()
+		return nil
+	}
+	m.startupAttempted = true
+	if m.coreInstallingLocked() {
+		m.startupPendingCore = true
+		m.mu.Unlock()
+		return nil
+	}
+	s := m.settings
+	if s.CorePath == "" {
+		m.startupPendingCore = true
+		m.mu.Unlock()
+		return nil
+	}
+	info, statErr := os.Stat(s.CorePath)
+	m.startupPendingCore = os.IsNotExist(statErr)
+	if m.startupPendingCore {
+		m.mu.Unlock()
+		return nil
+	}
+	m.mu.Unlock()
+	err := statErr
+	if err == nil {
+		if !info.Mode().IsRegular() {
+			err = fmt.Errorf("sing-box 内核路径不是文件")
+		} else {
+			err = m.connectWithSettings(ctx, s, true)
+		}
+	}
+	if err != nil {
+		m.mu.Lock()
+		if !m.closed && !m.repairing && !m.stopping && m.process == nil && m.runtime.Status != "error" {
+			m.runtime = vpngate.RuntimeState{Status: "error", Message: err.Error()}
+		}
+		m.mu.Unlock()
+		m.coreLogs.Add(time.Now(), "error", "无法启动 sing-box："+redactUpstream(s.Upstream)(err.Error()))
+	}
+	return err
+}
+
+func (m *Manager) startAfterCoreReady() {
+	ctx, cancel := context.WithTimeout(m.ctx, 45*time.Second)
+	defer cancel()
+	_ = m.startDesktop(ctx, true)
+}
 
 func (m *Manager) inspectDesktopRecovery() error {
 	data, err := os.ReadFile(filepath.Join(m.dir, "proxy-snapshot.json"))
@@ -90,6 +151,8 @@ func (m *Manager) stopDesktop(ctx context.Context) (vpngate.State, error) {
 		return m.State(), fmt.Errorf("软件正在停止或修复，请稍后重试")
 	}
 	m.stopping = true
+	m.startupAttempted = true
+	m.startupPendingCore = false
 	m.mu.Unlock()
 	defer func() { m.mu.Lock(); m.stopping = false; m.mu.Unlock() }()
 	// A canceled rules job may need op to finish; never wait while holding it.
@@ -109,6 +172,8 @@ func (m *Manager) Repair(ctx context.Context) (vpngate.State, error) {
 		return m.State(), fmt.Errorf("软件正在停止或修复，请稍后重试")
 	}
 	m.repairing = true
+	m.startupAttempted = true
+	m.startupPendingCore = false
 	m.mu.Unlock()
 	defer func() { m.mu.Lock(); m.repairing = false; m.mu.Unlock() }()
 	// Wait before taking op: a canceled rule job may need op to finish.

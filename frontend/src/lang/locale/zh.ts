@@ -347,6 +347,7 @@ export default {
   router: {
     routing: '路由',
     overview: '概览',
+    logs: '日志',
     subscriptions: '订阅',
     rulesets: '规则集',
     plugins: '插件',

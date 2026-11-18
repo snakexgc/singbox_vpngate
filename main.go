@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"guiforcores/bridge"
+	"strings"
 	"time"
 
 	"github.com/wailsapp/wails/v2"
@@ -27,10 +28,19 @@ var icon []byte
 //go:embed build/appicon.png
 var appIcon []byte
 
+//go:embed VERSION
+var appVersion string
+
 const appTitle = "singbox_vpngate"
 
 func main() {
-	app := bridge.CreateApp(assets)
+	bridge.Env.AppVersion = strings.TrimSpace(appVersion)
+	bridge.CaptureAppLogs()
+	app, err := bridge.CreateApp(assets)
+	if err != nil {
+		bridge.ShowStartupError(appTitle, err)
+		return
+	}
 
 	trayIcon := icon
 	if bridge.Env.OS == "linux" {
@@ -39,7 +49,7 @@ func main() {
 	trayStart, trayEnd := bridge.CreateTray(app, trayIcon)
 
 	// Create application with options
-	err := wails.Run(&options.App{
+	err = wails.Run(&options.App{
 		MinWidth:         600,
 		MinHeight:        400,
 		DisableResize:    false,
@@ -57,6 +67,7 @@ func main() {
 			ContentProtection:    bridge.Config.ContentProtection,
 			BackdropType:         windows.Acrylic,
 			WebviewBrowserPath:   bridge.Env.WebviewPath,
+			WebviewUserDataPath:  bridge.WebView2UserDataPath(),
 		},
 		Mac: &mac.Options{
 			TitleBar:             mac.TitleBarHiddenInset(),
@@ -78,7 +89,7 @@ func main() {
 		},
 		AssetServer: &assetserver.Options{
 			Assets:     assets,
-			Middleware: bridge.RollingRelease,
+			Middleware: bridge.FrontendCache,
 		},
 		SingleInstanceLock: &options.SingleInstanceLock{
 			UniqueId: func() string {
@@ -97,6 +108,8 @@ func main() {
 			app.Ctx = ctx
 			runtime.InitializeNotifications(ctx)
 			trayStart()
+			bridge.AppLogger().Info(appTitle + " started")
+			bridge.StartVPNGateRuntime()
 		},
 		OnShutdown: func(ctx context.Context) {
 			bridge.CloseVPNGateRuntime()
@@ -113,6 +126,7 @@ func main() {
 		Bind: []any{
 			app,
 		},
+		Logger:   bridge.AppLogger(),
 		LogLevel: logger.INFO,
 		Debug: options.Debug{
 			OpenInspectorOnStartup: true,

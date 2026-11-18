@@ -3,6 +3,7 @@ import { computed } from 'vue'
 
 import { onLogs, onMemory, onConnections, onTraffic } from '@/api/kernel'
 import { useVPNGateStore } from '@/stores/vpngate'
+import { isVPNGateCoreRunning } from '@/utils/vpngate'
 
 export type ProxyType = 'mixed' | 'http' | 'socks'
 export type ProxyEndpoint = {
@@ -17,7 +18,7 @@ export type ProxyEndpoint = {
 // The desktop manager owns processes and configuration; this store only reads its state.
 export const useKernelApiStore = defineStore('kernelApi', () => {
   const vpn = useVPNGateStore()
-  const running = computed(() => ['connected', 'direct'].includes(vpn.state?.runtime.status || ''))
+  const running = computed(() => isVPNGateCoreRunning(vpn.state?.runtime.status))
   const starting = computed(
     () => vpn.state?.runtime.status === 'starting' || vpn.busy === 'connect',
   )

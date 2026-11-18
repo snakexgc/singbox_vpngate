@@ -27,6 +27,18 @@ var vpnDesktop struct {
 	closing bool
 }
 
+// Wails calls this once the desktop single-instance lock is active.
+func StartVPNGateRuntime() {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		_, err := vpnRequest(ctx, "runtime.startup", nil)
+		if err != nil {
+			appSessionLogger.Error("VPNGate desktop startup failed")
+		}
+	}()
+}
+
 // The GUI owns its runtime. No installed service or service IPC is required.
 func (a *App) VPNGateRequest(method, payload string) FlagResult {
 	if method == "runtime.elevate" {
@@ -47,6 +59,15 @@ func (a *App) VPNGateRequest(method, payload string) FlagResult {
 		return FlagResult{false, "无效的 VPNGate 请求"}
 	}
 	result, err := vpnRequest(ctx, method, json.RawMessage(payload))
+	if method != "state" && method != "core.status" && method != "logs.read" {
+		if err != nil {
+			// Operation details belong in the runtime/task records. Log the result
+			// here without dumping paths, credentials, or user-provided payloads.
+			appSessionLogger.Error("VPNGate " + method + " failed")
+		} else {
+			appSessionLogger.Info("VPNGate " + method + " OK")
+		}
+	}
 	if err != nil {
 		return FlagResult{false, err.Error()}
 	}
@@ -58,6 +79,9 @@ func (a *App) VPNGateRequest(method, payload string) FlagResult {
 }
 
 func vpnRequest(ctx context.Context, method string, payload json.RawMessage) (any, error) {
+	if method == "logs.read" {
+		return readVPNGateLogs(payload)
+	}
 	m, err := localVPNGateRuntime()
 	if err != nil {
 		if method == "repair" {
@@ -87,6 +111,9 @@ func dispatchDesktop(ctx context.Context, m desktopRuntime, method string, paylo
 	}
 	if method == "connect" && legacy {
 		return nil, fmt.Errorf("检测到旧版后台保护组件，请先点击修复软件清理，再连接")
+	}
+	if method == "runtime.startup" && legacy {
+		return m.State(), nil
 	}
 	if method == "repair" {
 		if legacy && !admin {
@@ -140,12 +167,19 @@ func portableCorePath() string {
 		name += ".exe"
 	}
 	candidates := []string{filepath.Join(Env.BasePath, name), filepath.Join(Env.BasePath, "core", name), filepath.Join(Env.DataDir, "sing-box", name)}
+	appDir, _ := filepath.EvalSymlinks(Env.BasePath)
 	for _, path := range candidates {
 		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
-			return path
+			actual, err := filepath.EvalSymlinks(path)
+			if err == nil && (Env.OS != "windows" || strictlyInside(appDir, actual)) {
+				return actual
+			}
 		}
 	}
-	return candidates[0]
+	if Env.OS != "windows" {
+		return candidates[0]
+	}
+	return ""
 }
 
 // Called on normal GUI exit/restart. No unrelated sing-box process is touched.
@@ -202,6 +236,9 @@ func migrateDesktopState(target string, sources []string) error {
 			continue
 		}
 		if current == nil {
+			delete(old, "armed")
+			delete(old, "proxy")
+			delete(old, "runtimeActive")
 			current = old
 			changed = true
 			continue

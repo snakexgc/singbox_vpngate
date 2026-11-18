@@ -3,6 +3,7 @@ package vpngate
 import (
 	"fmt"
 	"net"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,6 +34,21 @@ func nodeIdentity(n Node) string {
 	}
 	return n.ID
 }
+
+// SameProfile accepts regenerated feed profiles when they produce identical
+// native endpoint configuration, including transport and all TLS material.
+func (n Node) SameProfile(other Node) bool {
+	if n.ConfigHash == other.ConfigHash {
+		return true
+	}
+	before, err := ParseOpenVPN(n.Config)
+	if err != nil {
+		return false
+	}
+	after, err := ParseOpenVPN(other.Config)
+	return err == nil && reflect.DeepEqual(before, after)
+}
+
 func rank(status string) int {
 	switch status {
 	case "available":
@@ -75,10 +91,13 @@ func NewPool(ns []Node) *Pool {
 	for _, n := range ns {
 		key := nodeIdentity(n)
 		if i, ok := indices[key]; ok {
-			if n.ConfigHash != p.nodes[i].ConfigHash {
+			if !n.SameProfile(p.nodes[i]) {
 				id := p.nodes[i].ID
 				if n.Status != "available" || n.LastTested == "" || n.PathFingerprint == "" {
 					clearHealth(&n)
+					clearEgress(&n)
+				} else if n.EgressCheckedAt == "" || n.EgressCacheKey == "" {
+					clearEgress(&n)
 				}
 				n.ID = id
 				p.nodes[i] = cloneNode(n)
@@ -111,6 +130,24 @@ func clearHealth(n *Node) {
 	n.Error = ""
 	n.FailureKind = ""
 	n.PathFingerprint = ""
+	// Egress is a dated observation with its own cache key and lifetime, not
+	// transient health. A changed profile cannot reuse a mismatched cache key.
+}
+
+func clearEgress(n *Node) {
+	n.EgressIP, n.EgressCountry, n.EgressCountryCode = "", "", ""
+	n.EgressRegion, n.EgressCity, n.EgressError = "", "", ""
+	n.EgressCheckedAt, n.EgressLanguage, n.EgressCacheKey = "", "", ""
+}
+
+// InvalidateEgress removes observations for a previous upstream connection.
+// Transient health changes and latency-target changes do not call this method.
+func (p *Pool) InvalidateEgress() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i := range p.nodes {
+		clearEgress(&p.nodes[i])
+	}
 }
 
 // Merge refreshes metadata and fills vacancies without evicting existing nodes.
@@ -137,10 +174,11 @@ func (p *Pool) Merge(incoming []Node, capacity int, activeID string) {
 			updated.Score = n.Score
 			updated.Speed = n.Speed
 			updated.LastSeen = n.LastSeen
-			if n.ConfigHash != old.ConfigHash {
+			if !n.SameProfile(old) {
 				updated.Config = n.Config
 				updated.ConfigHash = n.ConfigHash
 				clearHealth(&updated)
+				clearEgress(&updated)
 			}
 			p.nodes[i] = cloneNode(updated)
 			continue
@@ -194,6 +232,19 @@ func (p *Pool) UpdateProbe(result ProbeResult) bool {
 		n.Error = result.Error
 		n.FailureKind = result.FailureKind
 		n.PathFingerprint = result.PathFingerprint
+		if result.EgressIP != "" {
+			n.EgressIP = result.EgressIP
+			n.EgressCountry = result.EgressCountry
+			n.EgressCountryCode = result.EgressCountryCode
+			n.EgressRegion = result.EgressRegion
+			n.EgressCity = result.EgressCity
+			n.EgressCheckedAt = result.EgressCheckedAt
+			n.EgressLanguage = result.EgressLanguage
+			n.EgressCacheKey = result.EgressCacheKey
+		}
+		if result.EgressIP != "" || result.EgressError != "" || result.Status == "available" {
+			n.EgressError = result.EgressError
+		}
 		p.nodes[i] = cloneNode(*n)
 		return true
 	}

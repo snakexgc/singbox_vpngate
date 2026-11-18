@@ -1,21 +1,17 @@
 <script setup lang="ts">
-import { ref, onUnmounted } from 'vue'
+import { ref, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import { onMemory, onTraffic, onConnections } from '@/api/kernel'
-import { useVPNGateStore } from '@/stores/vpngate'
 import { formatBytes } from '@/utils'
-import { routingOptions } from '@/utils/vpngate'
-import { useVPNGateText } from '@/utils/vpngateText'
 
-import type { RoutingPreset } from '@/types/vpngate'
-const props = defineProps<{ ready: boolean }>()
+import RoutingModeSwitch from '@/components/_common/RoutingModeSwitch.vue'
+
+const props = defineProps<{ ready: boolean; session: string }>()
 const emit = defineEmits<{ connections: [] }>()
 const { t } = useI18n()
-const text = useVPNGateText()
-const vpn = useVPNGateStore()
 const trafficHistory = ref<[number[], number[]]>([[], []])
-const statistics = ref({
+const emptyStatistics = () => ({
   upload: 0,
   download: 0,
   downloadTotal: 0,
@@ -23,6 +19,14 @@ const statistics = ref({
   connections: 0,
   inuse: 0,
 })
+const statistics = ref(emptyStatistics())
+watch(
+  () => props.session,
+  () => {
+    statistics.value = emptyStatistics()
+    trafficHistory.value = [[], []]
+  },
+)
 const offMemory = onMemory((data) => {
   statistics.value.inuse = data.inuse
 })
@@ -41,116 +45,127 @@ const offConnections = onConnections((data) => {
   statistics.value.uploadTotal = data.uploadTotal
   statistics.value.connections = data.connections?.length || 0
 })
-const mode = (value: string) => {
-  if (vpn.state && !vpn.busy)
-    void vpn.saveSettings({ ...vpn.state.settings, routingPreset: value as RoutingPreset })
-}
 onUnmounted(() => {
   offMemory()
   offTraffic()
   offConnections()
 })
 </script>
+
 <template>
   <div class="home-overview">
-    <div class="home-stats stats-grid gap-12">
-      <Card
-        :title="t('home.overview.realtimeTraffic')"
-        class="home-stat-card home-stat-card--realtime"
-      >
-        <div class="home-stat-card__value flex gap-8 py-8 text-12">
-          <span class="metric metric--upload"
-            >↑ {{ props.ready ? formatBytes(statistics.upload) + '/s' : '—' }}</span
-          ><span class="metric metric--download"
-            >↓ {{ props.ready ? formatBytes(statistics.download) + '/s' : '—' }}</span
-          >
+    <div class="statistics">
+      <Card :title="t('home.overview.realtimeTraffic')" class="statistics-card">
+        <div class="detail">
+          <span v-if="ready">↑ {{ formatBytes(statistics.upload) }}/s</span>
+          <span v-if="ready">↓ {{ formatBytes(statistics.download) }}/s</span>
+          <span v-else>—</span>
         </div>
       </Card>
-      <Card
-        :title="text('本次运行流量 · Traffic this run')"
-        class="home-stat-card home-stat-card--total"
-      >
-        <div class="home-stat-card__value flex gap-8 py-8 text-12">
-          <span class="metric metric--upload"
-            >↑ {{ props.ready ? formatBytes(statistics.uploadTotal) : '—' }}</span
-          ><span class="metric metric--download"
-            >↓ {{ props.ready ? formatBytes(statistics.downloadTotal) : '—' }}</span
-          >
+      <Card :title="t('home.overview.totalTraffic')" class="statistics-card">
+        <div class="detail">
+          <span v-if="ready">↑ {{ formatBytes(statistics.uploadTotal) }}</span>
+          <span v-if="ready">↓ {{ formatBytes(statistics.downloadTotal) }}</span>
+          <span v-else>—</span>
         </div>
       </Card>
-      <Card
-        :title="t('home.overview.connections')"
-        class="home-stat-card home-stat-card--connections cursor-pointer"
-        @click="emit('connections')"
-        ><div class="home-stat-card__value py-8 text-12">
-          {{ props.ready ? statistics.connections : '—' }}
-        </div></Card
-      >
-      <Card :title="t('home.overview.memory')" class="home-stat-card home-stat-card--memory"
-        ><div class="home-stat-card__value py-8 text-12">
-          {{ props.ready ? formatBytes(statistics.inuse) : '—' }}
-        </div></Card
-      >
+      <Card :title="t('home.overview.connections')" class="statistics-card">
+        <div class="detail">{{ ready ? statistics.connections : '—' }}</div>
+        <button
+          type="button"
+          class="connections-target rounded-8"
+          aria-haspopup="dialog"
+          :aria-label="t('home.overview.connections')"
+          :disabled="!ready"
+          @click="emit('connections')"
+        />
+      </Card>
+      <Card :title="t('home.overview.memory')" class="statistics-card">
+        <div class="detail">{{ ready ? formatBytes(statistics.inuse) : '—' }}</div>
+      </Card>
     </div>
-    <div class="home-dashboard dashboard-grid gap-12 mt-12">
-      <Card :title="t('home.overview.traffic')" class="traffic-panel">
+
+    <div class="dashboard-row">
+      <section class="traffic-panel" aria-labelledby="overview-traffic-label">
+        <div class="dashboard-heading">
+          <h2 id="overview-traffic-label">{{ t('home.overview.traffic') }}</h2>
+          <slot name="traffic-status" />
+        </div>
         <TrafficChart
-          :height="170"
           :series="trafficHistory"
           :legend="[t('home.overview.transmit'), t('home.overview.receive')]"
         />
-      </Card>
-      <div class="mode-panel flex flex-col gap-8">
-        <Card
-          v-for="option in routingOptions"
-          :key="option.value"
-          :title="text(option.label)"
-          :selected="vpn.state?.settings.routingPreset === option.value"
-          class="home-mode-card cursor-pointer"
-          @click="mode(option.value)"
-        >
-          <div class="py-2 text-12">
-            {{
-              option.value === 'direct'
-                ? text('业务直连 · Direct business traffic')
-                : option.value === 'bypass-cn'
-                  ? text('大陆域名外走 VPN · VPN outside mainland domains')
-                  : option.value === 'blacklist'
-                    ? text('黑名单走 VPN · VPN for blacklisted traffic')
-                    : text('全部业务走 VPN · VPN for all business traffic')
-            }}
-          </div>
-        </Card>
-      </div>
+      </section>
+      <section class="mode-panel" aria-labelledby="overview-mode-label">
+        <div class="dashboard-heading">
+          <h2 id="overview-mode-label">{{ t('kernel.mode') }}</h2>
+        </div>
+        <RoutingModeSwitch />
+      </section>
     </div>
   </div>
 </template>
+
 <style scoped lang="less">
-.stats-grid {
+.home-overview {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  margin-top: 20px;
+}
+.statistics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
 }
-.dashboard-grid {
+.detail {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 5px;
+  padding: 3px 0;
+  font-size: 12px;
+  line-height: 2;
+  font-variant-numeric: tabular-nums;
+  span {
+    white-space: nowrap;
+  }
+}
+.connections-target {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: transparent;
+}
+.dashboard-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.8fr) minmax(190px, 1fr);
-}
-@media (max-width: 900px) {
-  .mode-panel {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    align-content: start;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) clamp(192px, 25%, 264px);
+  gap: 8px;
+  > section {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
   }
 }
-@media (max-width: 700px) {
-  .stats-grid {
+.dashboard-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 48px;
+  h2 {
+    margin: 0;
+    color: var(--card-color);
+    font-size: 16px;
+  }
+}
+@media (max-width: 540px) {
+  .statistics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .dashboard-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .mode-panel {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (max-width: 460px) {
+  .dashboard-row {
+    grid-template-columns: 1fr;
   }
 }
 </style>

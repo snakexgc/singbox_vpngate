@@ -1,11 +1,17 @@
 import vue from '@vitejs/plugin-vue'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
+
+const appVersion = readFileSync(new URL('../VERSION', import.meta.url), 'utf8').trim()
 
 // https://vitejs.dev/config/
 export default defineConfig({
   base: './',
   plugins: [vue()],
+  define: {
+    'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion),
+  },
   server: {
     watch: {
       ignored: ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/src/bridge/wailsjs/**'],

@@ -95,8 +95,14 @@ func parseCoreVersion(output string) (string, error) {
 	for _, field := range strings.FieldsFunc(output, func(r rune) bool { return r == ',' || r == ' ' || r == '\r' || r == '\n' || r == '\t' }) {
 		tags[field] = true
 	}
-	if !tags["with_openvpn"] || !tags["with_gvisor"] {
-		return "", fmt.Errorf("内核缺少 with_openvpn 或 with_gvisor")
+	if !tags["with_openvpn"] {
+		return "", fmt.Errorf("内核缺少 with_openvpn")
+	}
+	// 1.14 uses gVisor for the native OpenVPN stack. Official 1.15 builds
+	// provide sing-tun's own stack and no longer include the with_gvisor tag.
+	parts := coreSemver.FindStringSubmatch(strings.TrimPrefix(version, "v"))
+	if parts[1] == "1" && parts[2] == "14" && !tags["with_gvisor"] {
+		return "", fmt.Errorf("sing-box 1.14 内核缺少 with_gvisor")
 	}
 	return strings.TrimPrefix(version, "v"), nil
 }
@@ -261,6 +267,9 @@ func (m *Manager) startCoreInstall(rawVersion string) (vpngate.Job, error) {
 			err = m.installCore(ctx, job, client, version)
 		}
 		m.finishJob(job, err)
+		if err == nil {
+			m.startAfterCoreReady()
+		}
 	}()
 	return initial, nil
 }
@@ -538,7 +547,7 @@ func (m *Manager) activateCore(ctx context.Context, selection string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if m.closed || m.repairing || m.stopping || m.process != nil || m.runtime.Status == "starting" {
+	if m.closed || m.repairing || m.stopping || m.runtimeBlocksCoreChangeLocked() {
 		return fmt.Errorf("软件状态已变化，未切换内核")
 	}
 	executable, err := ownedCorePath(m.dir, selection)
@@ -573,7 +582,12 @@ func (m *Manager) useCore(parent context.Context, rawVersion string) (vpngate.St
 	if err != nil {
 		return vpngate.State{}, err
 	}
-	defer func() { m.finishJob(job, err) }()
+	defer func() {
+		m.finishJob(job, err)
+		if err == nil {
+			go m.startAfterCoreReady()
+		}
+	}()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stop := context.AfterFunc(parent, cancel)

@@ -1,6 +1,22 @@
 param([ValidateSet('amd64')][string]$Architecture = 'amd64', [switch]$SkipGui)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
+if (!$SkipGui) {
+    $releaseTag = (Get-Content -LiteralPath (Join-Path $repoRoot 'VERSION') -Raw).Trim()
+    $tagParts = [regex]::Match($releaseTag, '\Av(?<date>[0-9]{8})(?<revision>0|[1-9][0-9]{0,4})\z')
+    $releaseDate = [datetime]::MinValue
+    $culture = [Globalization.CultureInfo]::InvariantCulture
+    if (!$tagParts.Success -or [int]$tagParts.Groups['revision'].Value -gt [uint16]::MaxValue -or
+        ![datetime]::TryParseExact($tagParts.Groups['date'].Value, 'yyyyMMdd', $culture, [Globalization.DateTimeStyles]::None, [ref]$releaseDate)) {
+        throw 'VERSION must be vYYYYMMDD followed by a revision from 0 to 65535 without leading zeros.'
+    }
+    # Keep the month/day digits padded so the PE ProductVersion string can recover the exact tag.
+    $nativeVersion = $releaseDate.ToString('yyyy.MMdd', $culture) + '.' + $tagParts.Groups['revision'].Value
+    $wailsConfig = Get-Content -LiteralPath (Join-Path $repoRoot 'wails.json') -Raw | ConvertFrom-Json
+    if ($wailsConfig.info.productVersion -cne $nativeVersion) {
+        throw "wails.json info.productVersion must be $nativeVersion for release $releaseTag."
+    }
+}
 & (Join-Path $PSScriptRoot 'prepare-rule-resources.ps1')
 $outputDirectory = Join-Path $repoRoot "build\bin\singbox_vpngate-gui-windows-$Architecture"
 $cacheDirectory = Join-Path $repoRoot 'build\bin\vpngate-cache'
@@ -37,6 +53,14 @@ try {
     finally { Pop-Location }
     go run github.com/wailsapp/wails/v2/cmd/wails@v2.17.0 build -s -trimpath -skipbindings -o singbox_vpngate.desktop.exe
     if ($LASTEXITCODE -ne 0) { throw 'Wails build failed.' }
+    $desktopExe = Join-Path $repoRoot 'build\bin\singbox_vpngate.desktop.exe'
+    $versionInfo = (Get-Item -LiteralPath $desktopExe).VersionInfo
+    $fileVersion = [version]::new($versionInfo.FileMajorPart, $versionInfo.FileMinorPart, $versionInfo.FileBuildPart, $versionInfo.FilePrivatePart)
+    $productVersion = [version]::new($versionInfo.ProductMajorPart, $versionInfo.ProductMinorPart, $versionInfo.ProductBuildPart, $versionInfo.ProductPrivatePart)
+    $expectedVersion = [version]::Parse("$nativeVersion.0")
+    if ($versionInfo.ProductVersion -cne $releaseTag -or $fileVersion -ne $expectedVersion -or $productVersion -ne $expectedVersion) {
+        throw "Expected executable ProductVersion $releaseTag and numeric file/product versions $expectedVersion."
+    }
     $payloadNames = @('singbox_vpngate.exe','GUI-LICENSE.txt','ACCEPTANCE.md')
     # Do not remove old bundled distributions or data from a previously run GUI.
     # Refuse a contaminated destination instead of silently shipping extra files.
@@ -45,7 +69,7 @@ try {
         if ($unexpectedFiles.Count -ne 0) { throw "Distribution directory contains additional files or user data. Preserve them and use a clean destination: $outputDirectory" }
     }
     New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
-    Copy-Item -LiteralPath (Join-Path $repoRoot 'build\bin\singbox_vpngate.desktop.exe') -Destination (Join-Path $outputDirectory 'singbox_vpngate.exe') -Force
+    Copy-Item -LiteralPath $desktopExe -Destination (Join-Path $outputDirectory 'singbox_vpngate.exe') -Force
     Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination (Join-Path $outputDirectory 'GUI-LICENSE.txt') -Force
     Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\vpngate-acceptance.md') -Destination (Join-Path $outputDirectory 'ACCEPTANCE.md') -Force
     $payloadPaths = $payloadNames | ForEach-Object { Join-Path $outputDirectory $_ }

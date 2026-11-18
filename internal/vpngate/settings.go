@@ -9,7 +9,7 @@ import (
 
 // DefaultSettings uses the user's local HTTP mixed listener; saved settings win.
 func DefaultSettings() Settings {
-	return Settings{Upstream: Upstream{Host: "127.0.0.1", Port: 10808, Protocol: "http", ProcessPaths: []string{}}, PoolCapacity: 200, RefreshMinutes: 30, RoutingPreset: "bypass-cn", MixedPort: 20122, TUNEnabled: true, SystemProxyEnabled: true, TestURL: "https://www.gstatic.com/generate_204", TestConcurrency: 3, TestTimeoutSeconds: 45, RulesAutoUpdate: true, RulesUpdateHours: 24, CNRulesURL: "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/cn.srs", GFWRulesURL: "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/gfw.srs"}
+	return Settings{Upstream: Upstream{Host: "127.0.0.1", Port: 10808, Protocol: "http", ProcessPaths: []string{}}, PoolCapacity: 200, RefreshMinutes: 30, RoutingPreset: "bypass-cn", MixedPort: 20122, TUNEnabled: true, SystemProxyEnabled: true, TestURL: "https://www.gstatic.com/generate_204", TestConcurrency: 3, TestTimeoutSeconds: 45, RulesAutoUpdate: true, RulesUpdateHours: 12, CNRulesURL: "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/cn.srs", GFWRulesURL: "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/gfw.srs"}
 }
 
 func validHost(host string) bool {

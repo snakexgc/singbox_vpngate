@@ -28,35 +28,47 @@ type Settings struct {
 	CorePath           string   `json:"corePath"`
 }
 type Node struct {
-	ID              string `json:"id"`
-	Hostname        string `json:"hostname"`
-	IP              string `json:"ip"`
-	Country         string `json:"country"`
-	CountryCode     string `json:"countryCode"`
-	Port            int    `json:"port"`
-	Protocol        string `json:"protocol"`
-	Score           int64  `json:"score"`
-	Speed           int64  `json:"speed"`
-	Config          string `json:"config,omitempty"`
-	ConfigHash      string `json:"configHash"`
-	Status          string `json:"status"`
-	LatencyMs       *int64 `json:"latencyMs"`
-	HandshakeMs     *int64 `json:"handshakeMs"`
-	LastTested      string `json:"lastTested"`
-	LastSeen        string `json:"lastSeen"`
-	Error           string `json:"error"`
-	FailureKind     string `json:"failureKind"`
-	PathFingerprint string `json:"pathFingerprint"`
+	ID                string `json:"id"`
+	Hostname          string `json:"hostname"`
+	IP                string `json:"ip"`
+	Country           string `json:"country"`
+	CountryCode       string `json:"countryCode"`
+	Port              int    `json:"port"`
+	Protocol          string `json:"protocol"`
+	Score             int64  `json:"score"`
+	Speed             int64  `json:"speed"`
+	Config            string `json:"config,omitempty"`
+	ConfigHash        string `json:"configHash"`
+	Status            string `json:"status"`
+	LatencyMs         *int64 `json:"latencyMs"`
+	HandshakeMs       *int64 `json:"handshakeMs"`
+	LastTested        string `json:"lastTested"`
+	LastSeen          string `json:"lastSeen"`
+	Error             string `json:"error"`
+	FailureKind       string `json:"failureKind"`
+	PathFingerprint   string `json:"pathFingerprint"`
+	EgressIP          string `json:"egressIP"`
+	EgressCountry     string `json:"egressCountry"`
+	EgressCountryCode string `json:"egressCountryCode"`
+	EgressRegion      string `json:"egressRegion"`
+	EgressCity        string `json:"egressCity"`
+	EgressError       string `json:"egressError"`
+	EgressCheckedAt   string `json:"egressCheckedAt"`
+	EgressLanguage    string `json:"egressLanguage"`
+	EgressCacheKey    string `json:"egressCacheKey"`
 }
 type RuntimeState struct {
-	Status          string `json:"status"`
-	Message         string `json:"message"`
-	Protected       bool   `json:"protected"`
-	ConnectedNodeID string `json:"connectedNodeId"`
-	StartedAt       string `json:"startedAt"`
-	CoreVersion     string `json:"coreVersion"`
-	UpstreamOwner   string `json:"upstreamOwner"`
-	RequiresAdmin   bool   `json:"requiresAdmin"`
+	Status             string `json:"status"`
+	LogLevel           string `json:"logLevel"`
+	Message            string `json:"message"`
+	Protected          bool   `json:"protected"`
+	ConnectedNodeID    string `json:"connectedNodeId"`
+	StartedAt          string `json:"startedAt"`
+	CoreVersion        string `json:"coreVersion"`
+	UpstreamOwner      string `json:"upstreamOwner"`
+	RequiresAdmin      bool   `json:"requiresAdmin"`
+	TUNEnabled         bool   `json:"tunEnabled"`
+	SystemProxyEnabled bool   `json:"systemProxyEnabled"`
 }
 type RepairState struct {
 	Needed        bool   `json:"needed"`
@@ -93,6 +105,7 @@ type ServiceState struct {
 }
 type State struct {
 	Settings       Settings     `json:"settings"`
+	LogLevel       string       `json:"logLevel"`
 	Nodes          []Node       `json:"nodes"`
 	SelectedNodeID string       `json:"selectedNodeId"`
 	Runtime        RuntimeState `json:"runtime"`
@@ -102,14 +115,23 @@ type State struct {
 	Repair         RepairState  `json:"repair"`
 }
 type ProbeResult struct {
-	NodeID          string `json:"nodeId"`
-	Status          string `json:"status"`
-	LatencyMs       *int64 `json:"latencyMs"`
-	HandshakeMs     *int64 `json:"handshakeMs"`
-	LastTested      string `json:"lastTested"`
-	Error           string `json:"error"`
-	FailureKind     string `json:"failureKind"`
-	PathFingerprint string `json:"pathFingerprint"`
+	NodeID            string `json:"nodeId"`
+	Status            string `json:"status"`
+	LatencyMs         *int64 `json:"latencyMs"`
+	HandshakeMs       *int64 `json:"handshakeMs"`
+	LastTested        string `json:"lastTested"`
+	Error             string `json:"error"`
+	FailureKind       string `json:"failureKind"`
+	PathFingerprint   string `json:"pathFingerprint"`
+	EgressIP          string `json:"egressIP"`
+	EgressCountry     string `json:"egressCountry"`
+	EgressCountryCode string `json:"egressCountryCode"`
+	EgressRegion      string `json:"egressRegion"`
+	EgressCity        string `json:"egressCity"`
+	EgressError       string `json:"egressError"`
+	EgressCheckedAt   string `json:"egressCheckedAt"`
+	EgressLanguage    string `json:"egressLanguage"`
+	EgressCacheKey    string `json:"egressCacheKey"`
 }
 type ConfigOptions struct {
 	Production     bool
@@ -118,6 +140,7 @@ type ConfigOptions struct {
 	CNRulesPath    string
 	GFWRulesPath   string
 	LogPath        string
+	LogLevel       string
 }
 type Pool struct {
 	mu    sync.RWMutex

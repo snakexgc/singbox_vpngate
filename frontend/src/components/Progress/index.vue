@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+defineOptions({ inheritAttrs: false })
+
 interface Props {
   percent: number
   status?: 'primary' | 'warning' | 'danger'
@@ -39,6 +41,7 @@ const circleStyle = computed(() => {
 <template>
   <div
     v-if="type === 'line'"
+    v-bind="$attrs"
     :aria-valuenow="Math.min(percent || 0, 100)"
     aria-valuemax="100"
     aria-valuemin="0"
@@ -53,6 +56,7 @@ const circleStyle = computed(() => {
   </div>
   <div
     v-if="type === 'circle'"
+    v-bind="$attrs"
     :aria-valuenow="Math.min(percent || 0, 100)"
     :style="circleStyle"
     aria-valuemax="100"

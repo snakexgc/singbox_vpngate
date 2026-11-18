@@ -16,6 +16,9 @@ const {
   normalizeVPNGateState,
   validateVPNGateSettings,
   filterVPNGateNodes,
+  formatVPNGateRegion,
+  formatVPNGateEndpoint,
+  formatVPNGateCountry,
   submitVPNGateSettingsDraft,
   canConnectVPNGate,
 } = await import('../src/utils/vpngate.ts')
@@ -43,7 +46,11 @@ test('first-run defaults use the requested local HTTP mixed proxy without creden
   assert.equal(value.settings.upstream.username, '')
   assert.equal(value.settings.upstream.password, '')
   assert.equal(value.settings.mixedPort, 20122)
+  assert.equal(value.settings.tunEnabled, false)
+  assert.equal(value.settings.systemProxyEnabled, false)
   assert.equal(value.settings.poolCapacity, 200)
+  assert.equal(value.settings.refreshMinutes, 30)
+  assert.equal(value.settings.rulesUpdateHours, 12)
   assert.equal(value.service.installed, false)
   assert.equal(value.runtime.protected, false)
   assert.equal(value.runtime.requiresAdmin, false)
@@ -170,7 +177,7 @@ test('an install completing during an older core check queues a fresh detection'
   assert.equal(store.coreStatus.path, 'new.exe')
 })
 
-test('desktop connection controls work without a service and honor TUN privilege requirements', () => {
+test('desktop core can start without a node or elevated capture permissions', () => {
   const value = state()
   value.settings.upstream.port = 1080
   value.selectedNodeId = 'node'
@@ -178,10 +185,10 @@ test('desktop connection controls work without a service and honor TUN privilege
   assert.equal(value.service.running, false)
   assert.equal(canConnectVPNGate(value), true)
   value.runtime.requiresAdmin = true
-  assert.equal(canConnectVPNGate(value), false)
+  assert.equal(canConnectVPNGate(value), true)
   value.runtime.requiresAdmin = false
   value.selectedNodeId = ''
-  assert.equal(canConnectVPNGate(value), false)
+  assert.equal(canConnectVPNGate(value), true)
   value.settings.routingPreset = 'direct'
   assert.equal(canConnectVPNGate(value), true)
   assert.equal(canConnectVPNGate(value, 'repair'), false)
@@ -189,6 +196,10 @@ test('desktop connection controls work without a service and honor TUN privilege
   assert.equal(canConnectVPNGate(value), false)
   value.jobs = []
   value.runtime.status = 'connected'
+  assert.equal(canConnectVPNGate(value), false)
+  value.runtime.status = 'offline'
+  assert.equal(canConnectVPNGate(value), false)
+  value.runtime.status = 'starting'
   assert.equal(canConnectVPNGate(value), false)
 })
 
@@ -354,6 +365,79 @@ test('node filtering combines status with case insensitive country/IP/hostname s
     filterVPNGateNodes(nodes, '5.6', '').map((node) => node.id),
     ['b'],
   )
+})
+
+test('node filtering includes measured egress IP and location while preserving old node searches', () => {
+  const nodes = [
+    {
+      id: 'measured',
+      hostname: 'vpn-original',
+      ip: '192.0.2.1',
+      country: 'Japan',
+      countryCode: 'JP',
+      status: 'available',
+      egressIP: '198.51.100.8',
+      egressCountry: 'United States',
+      egressCountryCode: 'US',
+      egressRegion: 'California',
+      egressCity: 'San Jose',
+    },
+    {
+      id: 'legacy',
+      hostname: 'vpn-old',
+      ip: '192.0.2.2',
+      country: 'Korea',
+      countryCode: 'KR',
+      status: 'failed',
+    },
+  ]
+  for (const query of ['198.51.100.8', 'united STATES', 'US', '美国', 'calIFORNIA', 'san jose']) {
+    assert.deepEqual(
+      filterVPNGateNodes(nodes, query, 'available').map((node) => node.id),
+      ['measured'],
+    )
+  }
+  assert.deepEqual(
+    filterVPNGateNodes(nodes, 'vpn-original', '').map((node) => node.id),
+    ['measured'],
+  )
+  assert.deepEqual(
+    filterVPNGateNodes(nodes, '192.0.2.2', '').map((node) => node.id),
+    ['legacy'],
+  )
+  for (const query of ['Korea', 'South Korea', '韩国']) {
+    assert.deepEqual(
+      filterVPNGateNodes(nodes, query, '').map((node) => node.id),
+      ['legacy'],
+    )
+  }
+  assert.equal(filterVPNGateNodes(nodes, 'San Jose', 'failed').length, 0)
+  assert.equal(filterVPNGateNodes(nodes, '', '').length, 2)
+})
+
+test('country names follow the UI language using measured codes and preserve unknown names', () => {
+  assert.equal(formatVPNGateCountry('US', 'United States', 'zh-CN'), '美国')
+  assert.equal(formatVPNGateCountry('JP', '日本', 'en'), 'Japan')
+  assert.equal(formatVPNGateCountry(' jp ', 'Japan', 'zh-CN'), '日本')
+  assert.equal(formatVPNGateCountry(undefined, '未识别地区', 'zh-CN'), '未识别地区')
+  assert.equal(
+    formatVPNGateCountry('invalid-code', 'Provider country', 'zh-CN'),
+    'Provider country',
+  )
+  assert.equal(formatVPNGateCountry(undefined, undefined, 'zh-CN'), '')
+})
+
+test('measured region formatting handles missing values and duplicate region/city labels', () => {
+  assert.equal(formatVPNGateRegion(undefined, undefined), '')
+  assert.equal(formatVPNGateRegion('California', 'San Jose'), 'California / San Jose')
+  assert.equal(formatVPNGateRegion(' Tokyo ', ' tokyo '), 'Tokyo')
+  assert.equal(formatVPNGateRegion('', 'Seoul'), 'Seoul')
+  assert.equal(formatVPNGateRegion('Osaka', ''), 'Osaka')
+})
+
+test('server endpoint formatting distinguishes IPv6 address from its port', () => {
+  assert.equal(formatVPNGateEndpoint('192.0.2.1', 443), '192.0.2.1:443')
+  assert.equal(formatVPNGateEndpoint('2001:db8::1', 443), '[2001:db8::1]:443')
 })
 
 test('RPC preserves exact typed payload and handles failed/malformed responses', async () => {

@@ -5,6 +5,8 @@ import * as Pinia from 'pinia'
 import ts from 'typescript'
 import * as Vue from 'vue'
 
+const runtimeHelpers = await import('../src/utils/vpngate.ts')
+
 function loadMonitor(vpn) {
   const telemetryCalls = []
   const telemetry = Object.fromEntries(
@@ -34,6 +36,7 @@ function loadMonitor(vpn) {
     vue: Vue,
     '@/api/kernel': telemetry,
     '@/stores/vpngate': { useVPNGateStore: () => vpn },
+    '@/utils/vpngate': runtimeHelpers,
   }
   const module = { exports: {} }
   new Function('require', 'module', 'exports', outputText)(
@@ -56,6 +59,10 @@ test('monitor follows managed state without invoking legacy runtime dependencies
   assert.equal(monitor.starting, false)
   vpn.state.runtime.status = 'connected'
   assert.equal(monitor.running, true)
+  vpn.state.runtime.status = 'offline'
+  assert.equal(monitor.running, true)
+  vpn.state.runtime.status = 'connecting'
+  assert.equal(monitor.running, true, 'the mixed listener is ready while VPNGate is connecting')
   vpn.state.runtime.status = 'starting'
   assert.equal(monitor.starting, true)
   vpn.busy = 'stop'
@@ -79,6 +86,10 @@ test('request proxy endpoint uses only the ready managed mixed listener', () => 
   assert.deepEqual(monitor.getProxyEndpoint(), expected)
   vpn.state.runtime.status = 'direct'
   vpn.state.settings.mixedPort = 23456
+  assert.deepEqual(monitor.getProxyEndpoint(), { ...expected, port: 23456 })
+  vpn.state.runtime.status = 'offline'
+  assert.deepEqual(monitor.getProxyEndpoint(), { ...expected, port: 23456 })
+  vpn.state.runtime.status = 'connecting'
   assert.deepEqual(monitor.getProxyEndpoint(), { ...expected, port: 23456 })
   for (const status of ['stopped', 'starting', 'protected', 'error']) {
     vpn.state.runtime.status = status

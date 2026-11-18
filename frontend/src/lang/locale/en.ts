@@ -347,6 +347,7 @@ export default {
   router: {
     routing: 'Routing',
     overview: 'Overview',
+    logs: 'Logs',
     subscriptions: 'Subscriptions',
     rulesets: 'Rulesets',
     plugins: 'Plugins',

@@ -34,9 +34,6 @@ func (m *Manager) refresh(ctx context.Context, j *vpngate.Job, manual bool) erro
 	s := m.settings
 	old := m.pool.Snapshot()
 	m.mu.Unlock()
-	if !manual && len(old) >= s.PoolCapacity {
-		return nil
-	}
 	client, err := proxyClient(s.Upstream)
 	if err != nil {
 		return err
@@ -80,7 +77,7 @@ func (m *Manager) refresh(ctx context.Context, j *vpngate.Job, manual bool) erro
 	candidates := []vpngate.Node{}
 	for _, n := range nodes {
 		previous, exists := known[n.ID]
-		if !exists || previous.ConfigHash != n.ConfigHash {
+		if !exists || !previous.SameProfile(n) {
 			candidates = append(candidates, n)
 		}
 	}
@@ -190,7 +187,7 @@ func (m *Manager) probeBatch(parent context.Context, j *vpngate.Job, s vpngate.S
 				}
 				m.mu.Lock()
 				for _, current := range m.pool.Snapshot() {
-					if current.ID == n.ID && current.ConfigHash == n.ConfigHash {
+					if current.ID == n.ID && current.SameProfile(n) {
 						m.pool.UpdateProbe(vpngate.ProbeResult{NodeID: n.ID, Status: "testing"})
 						break
 					}
@@ -224,7 +221,7 @@ func (m *Manager) probeBatch(parent context.Context, j *vpngate.Job, s vpngate.S
 				m.mu.Lock()
 				if fingerprint(s) == fingerprint(m.settings) {
 					for _, current := range m.pool.Snapshot() {
-						if current.ID == n.ID && current.ConfigHash == n.ConfigHash {
+						if current.ID == n.ID && current.SameProfile(n) {
 							if r.FailureKind == "environment" || r.Status == "canceled" && parent.Err() == nil {
 								m.pool.UpdateProbe(resultFromNode(n))
 							} else {
@@ -257,7 +254,10 @@ sendLoop:
 	return results, batchErr
 }
 func (m *Manager) probe(parent context.Context, s vpngate.Settings, n vpngate.Node) (r vpngate.ProbeResult) {
-	r = vpngate.ProbeResult{NodeID: n.ID, Status: "failed", FailureKind: "node", PathFingerprint: fingerprint(s), LastTested: now()}
+	r = resultForEgressPath(s, n)
+	r.NodeID, r.Status, r.FailureKind = n.ID, "failed", "node"
+	r.LatencyMs, r.HandshakeMs = nil, nil
+	r.PathFingerprint, r.LastTested, r.Error = fingerprint(s), now(), ""
 	defer func() {
 		if parent.Err() != nil {
 			r.Status = "canceled"
@@ -305,7 +305,7 @@ func (m *Manager) probe(parent context.Context, s vpngate.Settings, n vpngate.No
 	dir := filepath.Join(m.dir, "probes", id())
 	defer removeProbeDir(filepath.Join(m.dir, "probes"), dir)
 	opts := vpngate.ConfigOptions{MixedPort: port, LogPath: filepath.Join(dir, "core.log")}
-	p, err := startCore(ctx, s, &n, opts, dir)
+	p, err := startCore(ctx, s, &n, opts, dir, nil)
 	if err != nil {
 		r.Error = coreFailureDiagnostic(err, dir, s.Upstream)
 		var nodeErr nodeConfigError
@@ -347,6 +347,10 @@ func (m *Manager) probe(parent context.Context, s vpngate.Settings, n vpngate.No
 	r.Status = "available"
 	r.FailureKind = ""
 	r.Error = ""
+	// Location lookup has its own bounded timeout and still honors the
+	// batch's cancellation. Connectivity can consume its full allotted time.
+	cancel()
+	enrichEgress(parent, client, s, n, &r)
 	return
 }
 func refreshProbeTargets(candidates, existing []vpngate.Node, s vpngate.Settings) []vpngate.Node {
@@ -360,7 +364,8 @@ func refreshProbeTargets(candidates, existing []vpngate.Node, s vpngate.Settings
 			continue
 		}
 		tested, _ := time.Parse(time.RFC3339, n.LastTested)
-		if n.Status != "available" && n.Status != "failed" || time.Since(tested) > 30*time.Minute || n.PathFingerprint != fingerprint(s) {
+		egressMissing := n.Status == "available" && n.EgressIP == "" && n.EgressError == ""
+		if egressMissing || n.Status != "available" && n.Status != "failed" || time.Since(tested) > 30*time.Minute || n.PathFingerprint != fingerprint(s) {
 			targets = append(targets, n)
 			queued[n.ID] = true
 		}
@@ -368,7 +373,7 @@ func refreshProbeTargets(candidates, existing []vpngate.Node, s vpngate.Settings
 	return targets
 }
 func resultFromNode(n vpngate.Node) vpngate.ProbeResult {
-	return vpngate.ProbeResult{NodeID: n.ID, Status: n.Status, LatencyMs: n.LatencyMs, HandshakeMs: n.HandshakeMs, LastTested: n.LastTested, Error: n.Error, FailureKind: n.FailureKind, PathFingerprint: n.PathFingerprint}
+	return vpngate.ProbeResult{NodeID: n.ID, Status: n.Status, LatencyMs: n.LatencyMs, HandshakeMs: n.HandshakeMs, LastTested: n.LastTested, Error: n.Error, FailureKind: n.FailureKind, PathFingerprint: n.PathFingerprint, EgressIP: n.EgressIP, EgressCountry: n.EgressCountry, EgressCountryCode: n.EgressCountryCode, EgressRegion: n.EgressRegion, EgressCity: n.EgressCity, EgressError: n.EgressError, EgressCheckedAt: n.EgressCheckedAt, EgressLanguage: n.EgressLanguage, EgressCacheKey: n.EgressCacheKey}
 }
 func applyToNode(n *vpngate.Node, r vpngate.ProbeResult) {
 	n.Status = r.Status
@@ -378,6 +383,15 @@ func applyToNode(n *vpngate.Node, r vpngate.ProbeResult) {
 	n.Error = r.Error
 	n.FailureKind = r.FailureKind
 	n.PathFingerprint = r.PathFingerprint
+	n.EgressIP = r.EgressIP
+	n.EgressCountry = r.EgressCountry
+	n.EgressCountryCode = r.EgressCountryCode
+	n.EgressRegion = r.EgressRegion
+	n.EgressCity = r.EgressCity
+	n.EgressError = r.EgressError
+	n.EgressCheckedAt = r.EgressCheckedAt
+	n.EgressLanguage = r.EgressLanguage
+	n.EgressCacheKey = r.EgressCacheKey
 }
 func removeProbeDir(root, path string) {
 	rel, err := filepath.Rel(root, path)

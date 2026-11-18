@@ -1,209 +1,289 @@
 <script setup lang="ts">
 import { computed, onActivated, onDeactivated, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 
-import { initWebsocket, destroyWebsocket } from '@/api/kernel'
+import { destroyWebsocket, initWebsocket } from '@/api/kernel'
 import { useVPNGateStore } from '@/stores/vpngate'
-import { canConnectVPNGate } from '@/utils/vpngate'
+import { canConnectVPNGate, isVPNGateCoreRunning } from '@/utils/vpngate'
 import { useVPNGateText } from '@/utils/vpngateText'
 
-import VPNGateRepair from '@/components/_common/VPNGateRepair.vue'
-import VPNGateStatus from '@/components/_common/VPNGateStatus.vue'
+import StateBadge from '@/components/_common/StateBadge.vue'
 
 import ConnectionsController from './components/ConnectionsController.vue'
-import LogsController from './components/LogsController.vue'
 import OverView from './components/OverView.vue'
+
+const { t } = useI18n()
+const router = useRouter()
 const text = useVPNGateText()
 const vpn = useVPNGateStore()
-const panel = ref('')
-let active = false
-const connected = computed(() => ['connected', 'direct'].includes(vpn.state?.runtime.status || ''))
-watch(connected, (ready) => {
+const showConnections = ref(false)
+const pageActive = ref(false)
+
+const runtime = computed(() => vpn.state?.runtime)
+const status = computed(() => runtime.value?.status)
+const running = computed(() => isVPNGateCoreRunning(status.value))
+const settings = computed(() => vpn.state?.settings)
+const busy = computed(
+  () =>
+    !!vpn.busy || status.value === 'starting' || vpn.activeJobs.some((job) => job.kind === 'core'),
+)
+const canStart = computed(
+  () =>
+    vpn.coreStatus?.installed !== false &&
+    !busy.value &&
+    (running.value || canConnectVPNGate(vpn.state, vpn.busy)),
+)
+const startLabel = computed(() =>
+  running.value ? t('home.overview.restart') : text('启动内核 · Start core'),
+)
+const connecting = computed(() => {
+  if (status.value === 'connecting') return true
+  if (!settings.value || settings.value.routingPreset === 'direct') return false
+  if (vpn.busy === 'nodes.use' && (running.value || status.value === 'starting')) return true
+  return !!vpn.selectedNode && (vpn.busy === 'connect' || status.value === 'starting')
+})
+const vpnBadge = computed(() => {
+  if (connecting.value) {
+    return { label: text('VPNGate 连接中 · VPNGate connecting'), tone: 'info' } as const
+  }
+  switch (status.value) {
+    case 'connected':
+      return { label: text('VPNGate 已连接 · VPNGate connected'), tone: 'success' } as const
+    case 'direct':
+      return { label: text('VPNGate 未启用 · VPNGate bypassed'), tone: 'neutral' } as const
+    case 'starting':
+      return { label: text('内核启动中 · Core starting'), tone: 'info' } as const
+    case 'offline':
+      if (!vpn.selectedNode) {
+        return {
+          label: text('VPNGate 未选节点 · VPNGate: No node selected'),
+          tone: 'danger',
+          to: '/vpngate',
+        } as const
+      }
+      return {
+        label: text('VPNGate 无法连接 · VPNGate unavailable'),
+        tone: 'danger',
+        to: '/logs',
+      } as const
+    case 'error':
+    case 'protected':
+    case 'degraded':
+      return {
+        label: text('VPNGate 无法连接 · VPNGate unavailable'),
+        tone: 'danger',
+        to: '/logs',
+      } as const
+    case 'stopped':
+      return { label: text('VPNGate 已停止 · VPNGate stopped'), tone: 'neutral' } as const
+    default:
+      return undefined
+  }
+})
+
+type CaptureSetting = 'systemProxyEnabled' | 'tunEnabled'
+const captureSwitches = [
+  { key: 'systemProxyEnabled', label: 'home.overview.systemProxy' },
+  { key: 'tunEnabled', label: 'home.overview.tunMode' },
+] satisfies { key: CaptureSetting; label: string }[]
+const pending = ref<CaptureSetting>()
+const tunPending = computed(
+  () => running.value && settings.value?.tunEnabled && !runtime.value?.tunEnabled,
+)
+const setCapture = async (key: CaptureSetting, enabled: boolean) => {
+  const current = settings.value
+  if (!current || busy.value || current[key] === enabled) return
+  pending.value = key
+  try {
+    await vpn.saveSettings({ ...current, [key]: enabled })
+  } finally {
+    pending.value = undefined
+  }
+}
+
+const telemetrySession = computed(() =>
+  running.value ? runtime.value?.startedAt || 'running' : '',
+)
+watch([pageActive, telemetrySession], ([active, session]) => {
   destroyWebsocket()
-  if (active && ready) initWebsocket()
+  if (active && session) initWebsocket()
+  else showConnections.value = false
 })
 onActivated(() => {
-  active = true
-  destroyWebsocket()
-  if (connected.value) initWebsocket()
+  pageActive.value = true
 })
 onDeactivated(() => {
-  active = false
-  panel.value = ''
-  destroyWebsocket()
+  pageActive.value = false
 })
 onUnmounted(destroyWebsocket)
-const canConnect = computed(() => canConnectVPNGate(vpn.state, vpn.busy))
 </script>
+
 <template>
-  <div class="overview-page flex flex-col gap-8 pb-16">
-    <VPNGateStatus />
-    <Card class="runtime-card">
-      <div v-if="vpn.state" class="runtime-content">
-        <div class="runtime-topline">
-          <div class="runtime-identity">
-            <strong class="runtime-state">{{ text(vpn.state.runtime.status) }}</strong>
-            <span class="runtime-node" :title="vpn.selectedNode?.hostname">{{
-              vpn.selectedNode
-                ? `${vpn.selectedNode.country} · ${vpn.selectedNode.hostname}`
-                : text('尚未选择节点 · No node selected')
-            }}</span>
-          </div>
-          <div class="runtime-actions">
-            <Button
-              type="primary"
-              size="small"
-              :disabled="
-                !!vpn.busy ||
-                !canConnect ||
-                vpn.state.runtime.status === 'starting' ||
-                ['connected', 'direct'].includes(vpn.state.runtime.status)
-              "
-              :loading="vpn.busy === 'connect'"
-              @click="vpn.run('connect', undefined)"
-              >{{ text('连接 · Connect') }}</Button
-            >
-            <Button
-              size="small"
-              :disabled="!!vpn.busy || vpn.state.runtime.status === 'stopped'"
-              :loading="vpn.busy === 'stop'"
-              @click="vpn.run('stop', undefined)"
-              >{{ text('停止 · Stop') }}</Button
-            >
-            <Button size="small" type="text" :loading="vpn.loading" @click="vpn.refresh">{{
-              text('刷新 · Refresh')
-            }}</Button>
-          </div>
-        </div>
-        <div class="runtime-details">
-          <span
-            >{{ text('核心 · Core') }}:
-            {{
-              vpn.coreStatus?.version ||
-              vpn.state.runtime.coreVersion ||
-              text('未检测 · Not detected')
-            }}</span
-          >
-          <span
-            >{{ text('节点池 · Pool') }}: {{ vpn.state.nodes.length }}/{{
-              vpn.state.settings.poolCapacity
-            }}</span
-          >
-          <RouterLink to="/vpngate"
-            ><Button size="small" type="link">{{ text('选择节点 · Nodes') }}</Button></RouterLink
-          >
-          <RouterLink to="/settings"
-            ><Button size="small" type="link">{{ text('配置上游 · Upstream') }}</Button></RouterLink
-          >
-          <VPNGateRepair compact />
-        </div>
-        <div
-          v-if="vpn.state.runtime.message"
-          class="runtime-message select-text"
-          :title="vpn.state.runtime.message"
-        >
-          {{ vpn.state.runtime.message }}
-        </div>
-      </div>
-      <div v-else class="runtime-content">
-        {{ text('正在读取运行状态 · Reading runtime state…') }}
-      </div>
-    </Card>
-    <OverView :ready="connected" @connections="panel = connected ? 'connections' : ''" />
-    <Card v-if="vpn.state" :title="text('最近任务 · Recent jobs')">
-      <p
-        v-for="job in vpn.state.jobs
-          .filter((item) => item.status !== 'running')
-          .slice(-5)
-          .reverse()"
-        :key="job.id"
+  <div class="overview-page">
+    <div
+      class="kernel-status rounded-8"
+      role="group"
+      :aria-label="text('内核控制 · Core controls')"
+    >
+      <Button
+        type="text"
+        size="small"
+        icon="settings"
+        class="overview-action"
+        :aria-label="text('连接设置 · Connection settings')"
+        :title="text('连接设置 · Connection settings')"
+        @click="router.push('/settings')"
+      />
+      <Switch
+        v-for="item in captureSwitches"
+        :key="item.key"
+        :model-value="!!settings?.[item.key]"
+        :disabled="!settings || busy"
+        :aria-label="t(item.label)"
+        :aria-busy="pending === item.key || undefined"
+        :title="
+          item.key === 'tunEnabled' && tunPending
+            ? text(
+                'TUN 已请求开启，当前未接管流量 · TUN was requested and is not capturing traffic yet',
+              )
+            : t(item.label)
+        "
+        :tabindex="settings && !busy ? 0 : -1"
+        size="small"
+        border="square"
+        class="capture-switch"
+        @update:model-value="setCapture(item.key, $event)"
+        @keydown.space.prevent="setCapture(item.key, !settings?.[item.key])"
+        @keydown.enter.prevent="setCapture(item.key, !settings?.[item.key])"
       >
-        {{ text(job.kind) }} · {{ text(job.status) }} · {{ job.completed }}/{{ job.total }} ·
-        {{ job.message }}
-      </p>
-      <p v-if="!vpn.state.jobs.length">{{ text('暂无任务 · No jobs yet') }}</p>
-    </Card>
-    <Card v-if="connected" :title="text('运行监控 · Runtime monitor')">
-      <div class="flex gap-8 my-8">
-        <Button
-          :type="panel === 'connections' ? 'primary' : 'normal'"
-          @click="panel = panel === 'connections' ? '' : 'connections'"
-          >{{ text('连接 · Connections') }}</Button
-        >
-        <Button
-          :type="panel === 'logs' ? 'primary' : 'normal'"
-          @click="panel = panel === 'logs' ? '' : 'logs'"
-          >{{ text('日志 · Logs') }}</Button
-        >
-      </div>
-      <div v-if="panel" style="height: 360px" class="overflow-auto">
-        <ConnectionsController v-if="panel === 'connections'" /><LogsController v-else />
-      </div>
-    </Card>
+        {{ t(item.label) }}
+      </Switch>
+      <Button
+        type="text"
+        size="small"
+        icon="log"
+        class="overview-action ml-auto"
+        :aria-label="text('查看日志 · View logs')"
+        :title="text('查看日志 · View logs')"
+        @click="router.push('/logs')"
+      />
+      <Button
+        type="text"
+        size="small"
+        class="overview-action"
+        :icon="running ? 'restart' : 'play'"
+        :aria-label="startLabel"
+        :title="startLabel"
+        :disabled="!canStart"
+        :loading="vpn.busy === 'connect' || status === 'starting'"
+        @click="vpn.run('connect', undefined)"
+      />
+      <Button
+        type="text"
+        size="small"
+        icon="stop"
+        class="overview-action"
+        :aria-label="t('home.overview.stop')"
+        :title="t('home.overview.stop')"
+        :disabled="busy || !status || status === 'stopped'"
+        :loading="vpn.busy === 'stop'"
+        @click="vpn.run('stop', undefined)"
+      />
+    </div>
+
+    <OverView :ready="running" :session="telemetrySession" @connections="showConnections = true">
+      <template #traffic-status>
+        <span role="status" aria-atomic="true" class="traffic-status">
+          <RouterLink v-if="vpnBadge?.to" :to="vpnBadge.to" class="traffic-status-link">
+            <StateBadge :tone="vpnBadge.tone">{{ vpnBadge.label }}</StateBadge>
+          </RouterLink>
+          <StateBadge v-else-if="vpnBadge" :tone="vpnBadge.tone">{{ vpnBadge.label }}</StateBadge>
+        </span>
+      </template>
+    </OverView>
+
+    <div v-if="tunPending && !runtime?.requiresAdmin" class="overview-hint" role="status">
+      {{ text('TUN 尚未接管流量。 · TUN is not capturing traffic yet.') }}
+      <RouterLink to="/logs">{{ text('查看日志 · View logs') }}</RouterLink>
+    </div>
+    <Modal
+      v-model:open="showConnections"
+      :title="t('home.overview.connections')"
+      :submit="false"
+      mask-closable
+      cancel-text="common.close"
+      width="90"
+      height="90"
+    >
+      <ConnectionsController v-if="showConnections && running" />
+    </Modal>
   </div>
 </template>
 
 <style scoped lang="less">
-.runtime-content {
-  padding: 12px 4px;
+.overview-page {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.runtime-topline {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-.runtime-identity {
   flex: 1;
-  min-width: 0;
+  flex-direction: column;
+  padding-bottom: 4px;
+}
+.kernel-status {
   display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.runtime-state {
-  font-size: 22px;
-  white-space: nowrap;
-}
-.runtime-node {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  opacity: 0.8;
-}
-.runtime-actions {
-  display: flex;
-  gap: 6px;
   flex-shrink: 0;
-}
-.runtime-details {
-  display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--card-bg);
+}
+.overview-action {
+  min-width: 32px;
+  min-height: 28px;
+  color: var(--ui-accent);
+}
+.overview-action :deep(svg path) {
+  fill: currentColor;
+}
+.capture-switch {
+  margin-inline-end: 4px;
+  &.on :deep(.dot) {
+    left: 4px;
+  }
+  &.off :deep(.dot) {
+    left: calc(100% - 8px);
+  }
+  &.on :deep(.slot) {
+    margin-left: 12px;
+    margin-right: 8px;
+  }
+  &.off :deep(.slot) {
+    margin-left: 8px;
+    margin-right: 12px;
+  }
+  &[aria-disabled='true'] {
+    cursor: default;
+    opacity: 0.7;
+  }
+}
+.traffic-status-link {
+  display: inline-flex;
+  border-radius: 999px;
+  &:hover {
+    text-decoration: underline;
+  }
+}
+.overview-hint {
+  display: flex;
+  justify-content: center;
   flex-wrap: wrap;
+  gap: 2px 8px;
+  color: var(--card-color);
   font-size: 12px;
-}
-.runtime-message {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: 11px;
-  opacity: 0.7;
-}
-@media (max-width: 600px) {
-  .runtime-identity {
-    gap: 6px;
-  }
-  .runtime-state {
-    font-size: 18px;
-  }
-  .runtime-topline {
-    flex-wrap: wrap;
-  }
-  .runtime-details {
-    gap: 8px;
+  a {
+    color: var(--ui-accent);
+    &:hover {
+      text-decoration: underline;
+    }
   }
 }
 </style>

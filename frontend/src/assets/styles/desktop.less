@@ -1,0 +1,315 @@
+// Semantic colors are independent of the user's configurable action color.
+body {
+  --ui-text: #202938;
+  --ui-muted: #596579;
+  --ui-surface: #ffffff;
+  --ui-surface-soft: #edf1f6;
+  --ui-border: #dce2eb;
+  --ui-accent: #245ac7;
+  --ui-accent-bg: #eaf0ff;
+  --ui-success: #16704b;
+  --ui-success-bg: #e5f5ec;
+  --ui-warning: #8a5708;
+  --ui-warning-bg: #fff3d6;
+  --ui-danger: #b52d3c;
+  --ui-danger-bg: #fcebee;
+  --ui-info: #245ac7;
+  --ui-info-bg: #eaf0ff;
+  --ui-upload: #7548b3;
+  --ui-download: #246aa5;
+  --card-color: var(--ui-text);
+  --card-bg: var(--ui-surface);
+  --card-hover-bg: var(--ui-surface);
+  --card-active-bg: var(--ui-surface);
+  color: var(--ui-text);
+  background: #f4f6fa;
+  line-height: 1.5;
+}
+
+body[theme-mode='dark'] {
+  --ui-text: #e7edf6;
+  --ui-muted: #a7b3c6;
+  --ui-surface: #202733;
+  --ui-surface-soft: #2b3443;
+  --ui-border: #3b4658;
+  --ui-accent: #a4c2ff;
+  --ui-accent-bg: #2a3b59;
+  --ui-success: #85dfb2;
+  --ui-success-bg: #203e33;
+  --ui-warning: #f1c878;
+  --ui-warning-bg: #493c25;
+  --ui-danger: #ffa1ac;
+  --ui-danger-bg: #4b2b34;
+  --ui-info: #a4c2ff;
+  --ui-info-bg: #2a3b59;
+  --ui-upload: #c1a3f1;
+  --ui-download: #8fc9f5;
+  background: #171d27;
+}
+
+// Keep native/legacy primitives in the same surface system.
+:root body[theme-mode] {
+  --card-color: var(--ui-text);
+  --card-bg: var(--ui-surface);
+  --card-hover-bg: var(--ui-surface);
+  --card-active-bg: var(--ui-surface);
+  --btn-normal-color: var(--ui-text);
+  --btn-normal-bg: var(--ui-surface-soft);
+  --input-color: var(--ui-text);
+  --input-bg: var(--ui-surface);
+  --select-bg: var(--ui-surface);
+  --table-tr-odd-bg: var(--ui-surface);
+  --table-tr-even-bg: var(--ui-surface);
+  --table-tr-odd-hover-bg: var(--ui-surface-soft);
+  --table-tr-even-hover-bg: var(--ui-surface-soft);
+}
+
+.app-content {
+  padding: 0 20px 16px;
+}
+.app-header {
+  border-bottom: 1px solid var(--ui-border);
+}
+.app-page {
+  margin-top: 16px;
+  padding: 0 4px;
+  scrollbar-gutter: stable;
+}
+.app-global-status:empty {
+  display: none;
+}
+.app-global-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 36vh;
+  overflow-y: auto;
+  margin: 12px 4px 0;
+  flex-shrink: 0;
+}
+.app-titlebar {
+  color: var(--ui-muted);
+  .app-titlebar__logo {
+    width: 20px;
+    height: 20px;
+  }
+  .app-titlebar__version {
+    margin-left: 6px;
+    color: var(--ui-muted);
+    font-size: 11px;
+    font-weight: 400;
+  }
+}
+.page-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.page-title {
+  margin: 0;
+  color: var(--ui-text);
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.4px;
+}
+.page-subtitle {
+  margin: 4px 0 0;
+  color: var(--ui-muted);
+  font-size: 12px;
+}
+.ui-link {
+  color: var(--ui-accent);
+  font-size: 12px;
+  font-weight: 500;
+}
+.ui-link:hover {
+  text-decoration: underline;
+}
+.ui-details {
+  border: 1px solid var(--ui-border);
+  border-radius: 10px;
+  background: var(--ui-surface);
+  font-size: 13px;
+  > summary {
+    padding: 14px 16px;
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--ui-text);
+  }
+  &[open] > summary {
+    border-bottom: 1px solid var(--ui-border);
+    margin-bottom: 12px;
+  }
+}
+.gui-card {
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  box-shadow: none;
+  > .card-header {
+    padding: 14px 16px 8px;
+  }
+  > .card-header + div {
+    padding: 0 16px 16px;
+  }
+  .gui-card__title {
+    font-size: 13px;
+    font-weight: 600;
+  }
+  &:hover {
+    box-shadow: none;
+  }
+}
+.gui-table {
+  th {
+    color: var(--ui-muted);
+    font-weight: 500;
+    border-bottom: 1px solid var(--ui-border);
+  }
+  td {
+    border-bottom: 1px solid var(--ui-border);
+  }
+  tr:last-child td {
+    border-bottom: 0;
+  }
+}
+:root body .gui-input.border {
+  border-color: var(--ui-border);
+  &:focus-within {
+    border-color: var(--ui-accent);
+  }
+}
+body[feature-no-rounded='true'] {
+  .connection-card,
+  .connection-symbol,
+  .stat-card,
+  .node-pool,
+  .ui-details,
+  .state-badge,
+  .main-nav__link,
+  .status-banner,
+  .runtime-monitor,
+  .ui-select,
+  .node-search,
+  .settings-tabs,
+  .settings-tabs button {
+    border-radius: 0;
+  }
+}
+:where(button, a, input, textarea, select, summary, [tabindex='0']):focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 3px;
+}
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+button {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: default;
+}
+input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--ui-accent);
+  cursor: pointer;
+}
+.ui-select {
+  min-height: 34px;
+  padding: 5px 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  color: var(--ui-text);
+  background: var(--ui-surface);
+  font-size: 12px;
+  color-scheme: light;
+}
+body[theme-mode='dark'] .ui-select {
+  color-scheme: dark;
+}
+@media (max-width: 700px) {
+  .app-content {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+  .app-page {
+    margin-top: 14px;
+  }
+  .page-title {
+    font-size: 20px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+// The overview retains the original GUI's translucent surfaces and card typography.
+body:has(.app-main--overview) {
+  background-color: var(--bg-color);
+  line-height: 1.32;
+}
+.app-main--overview {
+  --card-color: var(--card-color-light);
+  --card-bg: var(--card-bg-light);
+  --card-hover-bg: var(--card-hover-bg-light);
+  --card-active-bg: var(--card-active-bg-light);
+  .app-content {
+    padding-inline: 12px;
+    padding-bottom: 8px;
+  }
+  .app-header {
+    border-bottom: 0;
+  }
+  .app-page--overview {
+    margin-top: 2px;
+  }
+  .app-titlebar .app-titlebar__logo {
+    width: 24px;
+    height: 24px;
+  }
+  .app-titlebar .app-titlebar__version {
+    color: inherit;
+    font-size: inherit;
+    font-weight: inherit;
+  }
+  .statistics-card {
+    border: 0;
+    border-radius: 8px;
+    > .card-header {
+      padding: 8px;
+    }
+    > .card-header + div {
+      padding: 0 8px 8px;
+    }
+    .gui-card__title {
+      font-size: 16px;
+      font-weight: 700;
+    }
+  }
+}
+body[theme-mode='dark'] .app-main--overview {
+  --card-color: var(--card-color-dark);
+  --card-bg: var(--card-bg-dark);
+  --card-hover-bg: var(--card-hover-bg-dark);
+  --card-active-bg: var(--card-active-bg-dark);
+}
+body[feature-no-rounded='true'] .app-main--overview .statistics-card {
+  border-radius: 0;
+}
+@media (max-width: 650px) {
+  .app-main--overview .statistics-card .gui-card__title {
+    font-size: 14px;
+  }
+}

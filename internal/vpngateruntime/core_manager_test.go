@@ -72,6 +72,26 @@ func TestValidateCoreRejectsOldMalformedAndSubstringBuildTags(t *testing.T) {
 	}
 }
 
+func TestCoreBuildTagsFollowNativeStackVersion(t *testing.T) {
+	for _, test := range []struct {
+		name, output string
+		valid        bool
+	}{
+		{"stable-needs-gvisor", "sing-box version 1.14.4\nTags: with_openvpn", false},
+		{"stable-with-gvisor", "sing-box version 1.14.4\nTags: with_openvpn,with_gvisor", true},
+		{"official-alpha-native-stack", "sing-box version 1.15.0-alpha.13\nTags: with_quic,with_openvpn", true},
+		{"native-stack-stable", "sing-box version 1.15.0\nTags: with_openvpn", true},
+		{"native-stack-still-needs-openvpn", "sing-box version 1.15.0-alpha.13\nTags: with_quic", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := parseCoreVersion(test.output)
+			if (err == nil) != test.valid {
+				t.Fatalf("core build compatibility: valid=%t err=%v", test.valid, err)
+			}
+		})
+	}
+}
+
 func TestCoreJobExcludesMainAndOtherJobs(t *testing.T) {
 	m := desktopWithHelperCore(t)
 	ctx, job, err := m.beginJob("core")
@@ -102,7 +122,7 @@ func TestCoreJobExcludesMainAndOtherJobs(t *testing.T) {
 
 func TestCoreInstallJobRequiresStoppedIdleManager(t *testing.T) {
 	m := desktopWithHelperCore(t)
-	for _, status := range []string{"starting", "connected"} {
+	for _, status := range []string{"starting", "connecting", "connected", "direct", "offline", "protected", "degraded"} {
 		m.runtime.Status = status
 		if ctx, j, err := m.beginJob("core"); err == nil {
 			m.finishJob(j, ctx.Err())
@@ -425,7 +445,8 @@ func TestCoreSelectionWriteFailureRollsBackSettingsAndHealth(t *testing.T) {
 	original := m.corePath
 	selection := "cores/v1.14.4-0123456789abcdef01234567/sing-box.exe"
 	latency := int64(23)
-	m.pool = vpngate.NewPool([]vpngate.Node{{ID: "preserved", Config: "private", Status: "available", LatencyMs: &latency}})
+	previousNode := measuredCacheFixture(m.settings, vpngate.Node{ID: "preserved", Config: "private", Status: "available", LatencyMs: &latency}, time.Now().Add(-time.Hour))
+	m.pool = vpngate.NewPool([]vpngate.Node{previousNode})
 	if err := os.Mkdir(filepath.Join(m.dir, "state.json"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -434,6 +455,24 @@ func TestCoreSelectionWriteFailureRollsBackSettingsAndHealth(t *testing.T) {
 	}
 	if m.corePath != original || m.settings.CorePath != original || m.selectedCore != "" || m.pool.Snapshot()[0].Status != "available" || *m.pool.Snapshot()[0].LatencyMs != 23 {
 		t.Fatal("selection failure damaged previous state")
+	}
+	if actual := m.pool.Snapshot()[0]; actual.EgressIP != previousNode.EgressIP || actual.EgressCheckedAt != previousNode.EgressCheckedAt {
+		t.Fatal("selection write failure discarded original core's egress cache")
+	}
+}
+
+func TestCoreSelectionPreservesEgressCache(t *testing.T) {
+	m := desktopWithHelperCore(t)
+	selection := "cores/v1.14.4-0123456789abcdef01234567/sing-box.exe"
+	n := measuredCacheFixture(m.settings, vpngate.Node{ID: "cached", Config: "private", Status: "available"}, time.Now().Add(-time.Hour))
+	m.pool = vpngate.NewPool([]vpngate.Node{n})
+	for _, scenario := range []string{"new core", "same core"} {
+		if err := m.activateCore(context.Background(), selection); err != nil {
+			t.Fatal(err)
+		}
+		if actual := m.pool.Snapshot()[0]; actual.Status != "untested" || actual.EgressIP != n.EgressIP || actual.EgressCheckedAt != n.EgressCheckedAt || !validEgressCache(m.settings, actual, time.Now()) {
+			t.Fatalf("%s selection must reset health and preserve the dated cache", scenario)
+		}
 	}
 }
 
@@ -470,6 +509,64 @@ func TestCoreUseSelectsPreviouslyInstalledVersionOffline(t *testing.T) {
 	}
 	if m.corePath != installed {
 		t.Fatal("failed offline selection lost current core")
+	}
+}
+
+func TestDesktopStartsAfterSelectingMissingCoreUnlessExplicitlyStopped(t *testing.T) {
+	for _, stopped := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stopped=%t", stopped), func(t *testing.T) {
+			m := desktopWithHelperCore(t)
+			m.restoreProxy = func() error { return nil }
+			m.settings.RoutingPreset = "direct"
+			helper := m.corePath
+			m.corePath = filepath.Join(m.dir, "missing.exe")
+			m.settings.CorePath = m.corePath
+			if _, err := m.Handle(context.Background(), "runtime.startup", nil); err != nil {
+				t.Fatal(err)
+			}
+			if !m.startupPendingCore || m.State().Runtime.Status != "stopped" {
+				t.Fatal("startup did not await core installation")
+			}
+			if stopped {
+				if _, err := m.Handle(context.Background(), "stop", nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			const selection = "cores/v1.14.4-0123456789abcdef01234567/sing-box.exe"
+			target := filepath.Join(m.dir, filepath.FromSlash(selection))
+			content, err := os.ReadFile(helper)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(target, content, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = m.Handle(context.Background(), "core.use", json.RawMessage(`{"version":"1.14.4"}`)); err != nil {
+				t.Fatal(err)
+			}
+			if stopped {
+				// Serialize with the async hook and examine the same startup path.
+				m.startAfterCoreReady()
+				if m.State().Runtime.Status != "stopped" {
+					t.Fatal("explicit stop was overridden after selecting a core")
+				}
+				return
+			}
+			timer := time.NewTimer(5 * time.Second)
+			defer timer.Stop()
+			ticker := time.NewTicker(20 * time.Millisecond)
+			defer ticker.Stop()
+			for m.State().Runtime.Status != "direct" {
+				select {
+				case <-timer.C:
+					t.Fatalf("selecting a core failed to resume pending startup: %+v", m.State().Runtime)
+				case <-ticker.C:
+				}
+			}
+		})
 	}
 }
 

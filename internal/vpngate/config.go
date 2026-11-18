@@ -51,7 +51,14 @@ func BuildConfig(s Settings, node *Node, options ConfigOptions) ([]byte, error) 
 		upstream["username"] = s.Upstream.Username
 		upstream["password"] = s.Upstream.Password
 	}
-	config := object{"log": object{"level": "info", "timestamp": true}, "outbounds": []any{object{"type": "direct", "tag": "direct"}, upstream}}
+	level := options.LogLevel
+	if level == "" {
+		level = DefaultLogLevel
+	}
+	if !ValidLogLevel(level) {
+		return nil, fmt.Errorf("invalid log level")
+	}
+	config := object{"log": object{"level": level, "timestamp": true}, "outbounds": []any{object{"type": "direct", "tag": "direct"}, upstream}}
 	if options.LogPath != "" {
 		config["log"].(object)["output"] = options.LogPath
 	}
@@ -60,7 +67,7 @@ func BuildConfig(s Settings, node *Node, options ConfigOptions) ([]byte, error) 
 	}
 	inbounds := []any{object{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": port}}
 	if options.Production && s.TUNEnabled {
-		inbounds = append(inbounds, object{"type": "tun", "tag": "tun-in", "interface_name": "SingBoxVPNGate", "address": []string{"172.28.0.1/30", "fdfe:dcba:9876::1/126"}, "auto_route": true, "strict_route": true, "stack": "mixed"})
+		inbounds = append(inbounds, object{"type": "tun", "tag": "tun-in", "interface_name": "SingBoxVPNGate", "address": []string{"172.28.0.1/30", "fdfe:dcba:9876::1/126"}, "auto_route": true, "strict_route": true, "dns_mode": "hijack"})
 	}
 	config["inbounds"] = inbounds
 	if options.Production && options.ControllerPort != 0 {
@@ -68,6 +75,12 @@ func BuildConfig(s Settings, node *Node, options ConfigOptions) ([]byte, error) 
 	}
 	rules := []any{}
 	dnsRules := []any{}
+	if options.Production {
+		// Private names are hosts-only. Resolve business destinations here too:
+		// a direct outbound's default resolver would otherwise bypass DNS rules.
+		rules = append(rules, object{"domain": []string{"localhost"}, "domain_suffix": []string{"local", "lan"}, "action": "resolve", "server": "local-dns"})
+		dnsRules = append(dnsRules, object{"domain": []string{"localhost"}, "domain_suffix": []string{"local", "lan"}, "action": "route", "server": "local-dns"})
+	}
 	// Exempt the external proxy process and its endpoint to prevent routing loops.
 	if options.Production && len(s.Upstream.ProcessPaths) > 0 {
 		rules = append(rules, object{"process_path": s.Upstream.ProcessPaths, "action": "route", "outbound": "direct"})
@@ -83,17 +96,21 @@ func BuildConfig(s Settings, node *Node, options ConfigOptions) ([]byte, error) 
 		dnsRules = append(dnsRules, object{"domain": []string{s.Upstream.Host}, "action": "route", "server": "direct-dns"})
 	}
 	rules = append(rules, object{"port": []int{53}, "action": "hijack-dns"})
-	if options.Production {
-		rules = append(rules, object{"ip_is_private": true, "action": "route", "outbound": "direct"})
+	if options.Production && (preset == "bypass-cn" || preset == "blacklist") {
+		// Recover HTTP/TLS/QUIC names when applications use cached IPs or their
+		// own DNS. Sniffing supplies routing metadata; it never replaces the
+		// original destination or depends solely on the DNS reverse cache.
+		rules = append(rules, object{"action": "sniff", "sniffer": []string{"http", "tls", "quic"}})
 	}
 	if options.Production {
-		if options.Production {
-			dnsRules = append(dnsRules, object{"domain": []string{"localhost"}, "domain_suffix": []string{"local", "lan"}, "action": "route", "server": "direct-dns"})
-		}
+		rules = append(rules, object{"ip_is_private": true, "action": "route", "outbound": "direct"})
 	}
 	// An ordinary direct dialer is implicit. Native startup rejects an explicit
 	// DNS detour to an empty direct outbound even though `check` accepts it.
 	dnsServers := []any{object{"type": "tcp", "tag": "direct-dns", "server": "223.5.5.5", "server_port": 53}}
+	if options.Production {
+		dnsServers = append(dnsServers, object{"type": "hosts", "tag": "local-dns", "predefined": object{"localhost": []string{"127.0.0.1", "::1"}}})
+	}
 	if endpoint != nil {
 		dnsServers = append(dnsServers, object{"type": "tcp", "tag": "vpn-dns", "server": "1.1.1.1", "server_port": 53, "detour": "vpngate"})
 		if net.ParseIP(endpoint["server"].(string)) == nil {
@@ -167,6 +184,6 @@ func BuildConfig(s Settings, node *Node, options ConfigOptions) ([]byte, error) 
 		route["rule_set"] = ruleSets
 	}
 	config["route"] = route
-	config["dns"] = object{"servers": dnsServers, "rules": dnsRules, "final": dnsFinal, "strategy": "ipv4_only", "independent_cache": true, "reverse_mapping": true}
+	config["dns"] = object{"servers": dnsServers, "rules": dnsRules, "final": dnsFinal, "strategy": "ipv4_only", "reverse_mapping": true}
 	return json.MarshalIndent(config, "", "  ")
 }

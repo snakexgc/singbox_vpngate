@@ -31,8 +31,8 @@ export const updateTrayAndMenus = debounce(async () => {
     { type: 'item', text: `VPNGate: ${text(vpn.state?.runtime.status || '不可用 · Unavailable')}` },
     {
       type: 'item',
-      text: text('连接 · Connect'),
-      hidden: !canConnectVPNGate(vpn.state, vpn.busy),
+      text: text('启动内核 · Start core'),
+      hidden: vpn.coreStatus?.installed === false || !canConnectVPNGate(vpn.state, vpn.busy),
       event: () => vpn.run('connect', undefined),
     },
     {

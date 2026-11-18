@@ -80,7 +80,7 @@ onUnmounted(() => window.removeEventListener('resize', onResize))
     <div
       :class="isDarwin ? 'justify-center py-4 text-12' : 'text-14'"
       :style="{
-        color: kernelApiStore.running ? 'var(--primary-color)' : 'var(--color)',
+        color: kernelApiStore.running ? 'var(--ui-accent)' : 'var(--ui-text)',
       }"
       class="app-titlebar__brand font-bold w-full h-full flex items-center gap-4 duration-200"
       @dblclick="WindowToggleMaximise"

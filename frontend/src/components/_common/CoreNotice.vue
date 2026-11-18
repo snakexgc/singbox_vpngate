@@ -10,17 +10,13 @@ const text = useVPNGateText()
   <div v-if="vpn.coreStatus && !vpn.coreStatus.installed" class="core-notice" role="alert">
     <Icon icon="messageWarn" :size="20" aria-hidden="true" />
     <div class="core-notice-copy">
-      <strong>{{ text('未检测到可用的 sing-box 内核 · sing-box core is not ready') }}</strong>
+      <strong>{{ text('需要下载内核 · Core required') }}</strong>
       <p>
-        {{
-          text(
-            '请先在设置中下载内核，下载流量将经过上游代理。 · Download the core in Settings through your upstream proxy.',
-          )
-        }}
+        {{ text('先配置上游，再下载 sing-box。 · Configure upstream, then download sing-box.') }}
       </p>
     </div>
-    <RouterLink :to="{ path: '/settings', query: { tab: 'core' } }">
-      <Button type="primary" size="small">{{ text('下载 sing-box · Download sing-box') }}</Button>
+    <RouterLink class="core-notice-action" :to="{ path: '/settings', query: { tab: 'core' } }">
+      {{ text('下载内核 · Download core') }} →
     </RouterLink>
   </div>
 </template>
@@ -50,5 +46,11 @@ const text = useVPNGateText()
     margin: 2px 0 0;
     opacity: 0.8;
   }
+}
+.core-notice-action {
+  color: var(--ui-accent);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 0;
 }
 </style>
