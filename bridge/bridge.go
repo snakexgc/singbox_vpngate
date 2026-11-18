@@ -272,11 +272,15 @@ func processFixedWebView2Runtime() error {
 	if err != nil {
 		return err
 	}
+	actualRoot, err := filepath.EvalSymlinks(Env.DataDir)
+	if err != nil {
+		return err
+	}
 	actualDir, err := filepath.EvalSymlinks(webviewDir)
 	if err != nil {
 		return err
 	}
-	if !strictlyInside(Env.DataDir, actualDir) {
+	if !strictlyInside(actualRoot, actualDir) {
 		return fmt.Errorf("WebView2 运行库必须位于本地数据目录内：%s", webviewDir)
 	}
 	if Env.WebviewPath, err = findFixedWebView2(actualDir); err != nil || Env.WebviewPath != "" {

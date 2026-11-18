@@ -8,19 +8,28 @@ import (
 
 func TestWindowsDataPathsStayBesideExecutable(t *testing.T) {
 	appDir := filepath.Join(t.TempDir(), "portable app")
-	legacy := filepath.Join(t.TempDir(), "old data")
+	legacyParent := t.TempDir()
+	legacy := filepath.Join(legacyParent, "old data")
 	if err := os.Mkdir(appDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	actualAppDir, err := filepath.EvalSymlinks(appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actualLegacyParent, err := filepath.EvalSymlinks(legacyParent)
+	if err != nil {
 		t.Fatal(err)
 	}
 	for _, tt := range []struct{ dir, local, old string }{
 		{"", "data", legacy},
 		{"profile one", "profile one", ""},
 		{filepath.Join(appDir, "profile two"), "profile two", ""},
-		{legacy, "data", legacy},
-		{".", "data", appDir},
+		{legacy, "data", filepath.Join(actualLegacyParent, "old data")},
+		{".", "data", actualAppDir},
 	} {
 		local, old, err := windowsDataPaths(appDir, tt.dir, legacy)
-		if err != nil || local != filepath.Join(appDir, tt.local) || old != tt.old {
+		if err != nil || local != filepath.Join(actualAppDir, tt.local) || old != tt.old {
 			t.Fatalf("windowsDataPaths(%q) = %q, %q, %v", tt.dir, local, old, err)
 		}
 	}
@@ -47,7 +56,11 @@ func TestWindowsRuntimeCacheAndChildTempUseLocalProfile(t *testing.T) {
 	if err := initWindowsDataDir("portable profile"); err != nil {
 		t.Fatal(err)
 	}
-	data := filepath.Join(Env.BasePath, "portable profile")
+	actualAppDir, err := filepath.EvalSymlinks(Env.BasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := filepath.Join(actualAppDir, "portable profile")
 	if filepath.FromSlash(Env.DataDir) != data {
 		t.Fatalf("unexpected app profile %q", Env.DataDir)
 	}
@@ -83,8 +96,12 @@ func TestFixedWebView2UsesExtractedRuntimeBesideExecutable(t *testing.T) {
 	if err := processFixedWebView2Runtime(); err != nil {
 		t.Fatal(err)
 	}
-	if Env.WebviewPath != runtimeDir {
-		t.Fatalf("fixed runtime selected %q, want %q", Env.WebviewPath, runtimeDir)
+	actualRuntimeDir, err := filepath.EvalSymlinks(runtimeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if Env.WebviewPath != actualRuntimeDir {
+		t.Fatalf("fixed runtime selected %q, want %q", Env.WebviewPath, actualRuntimeDir)
 	}
 }
 
